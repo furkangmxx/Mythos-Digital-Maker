@@ -1,0 +1,9 @@
+setup.py
+src/mythos_cards_exporter.egg-info/PKG-INFO
+src/mythos_cards_exporter.egg-info/SOURCES.txt
+src/mythos_cards_exporter.egg-info/dependency_links.txt
+src/mythos_cards_exporter.egg-info/entry_points.txt
+src/mythos_cards_exporter.egg-info/not-zip-safe
+src/mythos_cards_exporter.egg-info/requires.txt
+src/mythos_cards_exporter.egg-info/top_level.txt
+tests/test_headers.py

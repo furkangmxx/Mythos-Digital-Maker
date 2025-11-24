@@ -1,0 +1,4 @@
+[console_scripts]
+cards-export = main:cli
+mythoscards = main:main
+mythoscards-gui = main:launch_gui
