@@ -322,7 +322,8 @@ class MythosGUI:
         self.image_dir_var = tk.StringVar()
         self.date_var = tk.StringVar(value=datetime.now().strftime("%Y%m%d"))
         self.part2_excel_var = tk.StringVar()    
-        
+        self.add_date_var = tk.BooleanVar(value=False)
+
         self.setup_ui()
         # Mevcut variables'lardan sonra ekleyin:
 
@@ -385,13 +386,29 @@ class MythosGUI:
         ttk.Entry(part2_frame, textvariable=self.image_dir_var, width=45).grid(row=1, column=1, padx=5, sticky=(tk.W, tk.E))
         ttk.Button(part2_frame, text="Seç", command=self.select_image_dir, width=6).grid(row=1, column=2)
         
-        # Tarih ve buton - tek satırda
-        date_button_frame = ttk.Frame(part2_frame)
-        date_button_frame.grid(row=2, column=0, columnspan=3, pady=(8, 0))
         
-        ttk.Label(date_button_frame, text="Tarih:").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(date_button_frame, textvariable=self.date_var, width=12).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Button(date_button_frame, text="Görselleri Eşleştir", command=self.match_images, width=18).pack(side=tk.LEFT)
+        # Tarih checkbox ve entry - tek satırda
+        date_options_frame = ttk.Frame(part2_frame)
+        date_options_frame.grid(row=2, column=0, columnspan=3, pady=(8, 0))
+        
+        # Checkbox: Tarih Ekle
+        ttk.Checkbutton(
+            date_options_frame, 
+            text="Tarih Ekle", 
+            variable=self.add_date_var
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Tarih entry
+        ttk.Label(date_options_frame, text="Tarih:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(date_options_frame, textvariable=self.date_var, width=10).pack(side=tk.LEFT, padx=(0, 15))
+        
+        # Eşleştir butonu
+        ttk.Button(
+            date_options_frame, 
+            text="Görselleri Eşleştir", 
+            command=self.match_images, 
+            width=18
+        ).pack(side=tk.LEFT)
         
         part2_frame.columnconfigure(1, weight=1)
         
@@ -693,42 +710,62 @@ class MythosGUI:
             self.part2_excel_var.set(filename)     
 
     def match_images(self):
-        """Görsel eşleştirme işlemi"""
-        # Excel kontrolü
-        excel_file = self.part2_excel_var.get()
-        if not excel_file:
-            messagebox.showerror("Hata", "Lütfen Excel dosyası seçin")
-            return
-        
-        if not self.image_dir_var.get():
-            messagebox.showerror("Hata", "Lütfen görsel klasörü seçin")
-            return
-        
-        self.log_text.delete(1.0, tk.END)
-        self.log_message("Part 2 başlıyor...")
-        
-        try:
-            result = process_image_mapping(
-                excel_file,  # Artık seçilen Excel
-                self.image_dir_var.get(), 
-                self.date_var.get()
-            )
+            """Görsel eşleştirme işlemi"""
+            # Excel kontrolü
+            excel_file = self.part2_excel_var.get()
+            if not excel_file:
+                messagebox.showerror("Hata", "Lütfen Excel dosyası seçin")
+                return
             
-            self.log_message(f"TAMAMLANDI!")
-            self.log_message(f"Bulunan: {result['found_count']}/{result['total_cards']}")
-            self.log_message(f"Başarı: {result['success_rate']:.1f}%")
+            if not self.image_dir_var.get():
+                messagebox.showerror("Hata", "Lütfen görsel klasörü seçin")
+                return
             
-            if result['warnings']:
-                self.log_message(f"{len(result['warnings'])} uyarı:")
-                for w in result['warnings'][:3]:
-                    self.log_message(f"  Satır {w['row']}: {w['message']}")
+            self.log_text.delete(1.0, tk.END)
+            self.log_message("Part 2 başlıyor...")
             
-            messagebox.showinfo("Başarılı", f"Görsel eşleştirme tamamlandı!\nBaşarı: {result['success_rate']:.1f}%")
+            # Tarih ekleme durumunu logla
+            add_date = self.add_date_var.get()
+            if add_date:
+                self.log_message(f"📅 Tarih eklenecek: {self.date_var.get()}")
+            else:
+                self.log_message("📅 Tarih ekleme KAPALI")
             
-        except Exception as e:
-            self.log_message(f"HATA: {str(e)}")
-            messagebox.showerror("Hata", str(e))
-
+            try:
+                result = process_image_mapping(
+                    excel_file,
+                    self.image_dir_var.get(), 
+                    self.date_var.get() if add_date else None,
+                    add_date_prefix=add_date
+                )
+                
+                self.log_message(f"\nTAMAMLANDI!")
+                self.log_message(f"✅ Bulunan: {result['found_count']}/{result['total_cards']}")
+                self.log_message(f"❌ Eksik: {result['missing_count']}")
+                self.log_message(f"⚠️ Çakışma: {result['conflict_count']}")
+                self.log_message(f"Başarı: {result['success_rate']:.1f}%")
+                
+                if result['warnings']:
+                    self.log_message(f"\n--- UYARILAR ({len(result['warnings'])}) ---")
+                    for w in result['warnings'][:5]:
+                        self.log_message(f"  Satır {w['row']}: {w['message']}")
+                    if len(result['warnings']) > 5:
+                        self.log_message(f"  ... ve {len(result['warnings'])-5} uyarı daha")
+                
+                if result['conflict_count'] > 0:
+                    messagebox.showwarning(
+                        "Çakışmalar Var", 
+                        f"Eşleştirme tamamlandı!\n"
+                        f"Başarı: {result['success_rate']:.1f}%\n\n"
+                        f"⚠️ {result['conflict_count']} çakışma var!"
+                    )
+                else:
+                    messagebox.showinfo("Başarılı", f"Başarı: {result['success_rate']:.1f}%")
+                
+            except Exception as e:
+                self.log_message(f"❌ HATA: {str(e)}")
+                messagebox.showerror("Hata", str(e))
+                
     def _find_latest_excel(self):
         """En son Excel dosyasını bul"""
         try:

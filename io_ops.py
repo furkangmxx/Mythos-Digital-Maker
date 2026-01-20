@@ -1,6 +1,15 @@
 """
-MythosCards Exporter - I/O Operations
+MythosCards Exporter - I/O Operations (v2.0)
 Excel dosya okuma ve yazma işlemleri
+
+DEĞİŞİKLİK: Çıktı sheet'inde yapılandırılmış kolonlar
+- Kart Listesi (eski format, geriye uyumluluk)
+- player_name
+- series_name  
+- group
+- denominator
+- is_signed
+- Görsel Dosyası (Part 2 için)
 """
 
 import logging
@@ -122,8 +131,19 @@ class ExcelWriter:
         logger.debug(f"Worksheet eklendi: {safe_name}")
         return worksheet
     
-    def write_cikti_sheet(self, lines: List[str]) -> None:
-        """Çıktı sheet'ini yaz"""
+    def write_cikti_sheet(self, lines: List[Any]) -> None:
+        """
+        Çıktı sheet'ini yaz - YENİ FORMAT
+        
+        Kolonlar:
+        A: Kart Listesi (text) - ANA KOLON
+        B: Görsel Dosyası - ANA KOLON (Part 2 için boş)
+        C: player_name - eşleştirme için
+        D: series_name - eşleştirme için
+        E: group - eşleştirme için
+        F: denominator - eşleştirme için
+        G: is_signed - eşleştirme için
+        """
         worksheet = self.add_worksheet("Çıktı")
         
         # Format
@@ -133,19 +153,46 @@ class ExcelWriter:
             'border': 1
         })
         
-        # Header
-        worksheet.write(0, 0, "Kart Listesi", header_format)
-        worksheet.write(0, 1, "Görsel Dosyası", header_format)  # Part 2 için hazır
+        # Headers - DOĞRU SIRALAMA
+        headers = [
+            "Kart Listesi",      # A - ana
+            "Görsel Dosyası",    # B - ana (Part 2 dolduracak)
+            "player_name",       # C - eşleştirme
+            "series_name",       # D - eşleştirme
+            "group",             # E - eşleştirme
+            "denominator",       # F - eşleştirme
+            "is_signed"          # G - eşleştirme
+        ]
         
-        # Data
+        for col, header in enumerate(headers):
+            worksheet.write(0, col, header, header_format)
+        
+        # Data - CardLine objelerinden al
         for i, line in enumerate(lines, 1):
-            worksheet.write(i, 0, line)
+            # line bir CardLine objesi mi yoksa string mi kontrol et
+            if hasattr(line, 'text'):
+                # CardLine objesi
+                worksheet.write(i, 0, line.text)                              # A: Kart Listesi
+                worksheet.write(i, 1, "")                                     # B: Görsel Dosyası (Part 2)
+                worksheet.write(i, 2, line.player)                            # C: player_name
+                worksheet.write(i, 3, line.series)                            # D: series_name
+                worksheet.write(i, 4, line.group if line.group else "")       # E: group
+                worksheet.write(i, 5, line.denominator)                       # F: denominator
+                worksheet.write(i, 6, "Evet" if line.is_signed else "Hayır")  # G: is_signed
+            else:
+                # Geriye uyumluluk: string ise sadece A kolonuna yaz
+                worksheet.write(i, 0, str(line))
         
         # Genişlik ayarla
-        worksheet.set_column('A:A', 50)
-        worksheet.set_column('B:B', 40)
+        worksheet.set_column('A:A', 55)  # Kart Listesi
+        worksheet.set_column('B:B', 55)  # Görsel Dosyası
+        worksheet.set_column('C:C', 25)  # player_name
+        worksheet.set_column('D:D', 20)  # series_name
+        worksheet.set_column('E:E', 35)  # group
+        worksheet.set_column('F:F', 12)  # denominator
+        worksheet.set_column('G:G', 10)  # is_signed
         
-        logger.info(f"Çıktı sheet'i yazıldı: {len(lines)} satır")
+        logger.info(f"Çıktı sheet'i yazıldı: {len(lines)} satır, 7 kolon")
     
     def write_ozet_sheet(self, summary_data: Dict[str, Any]) -> None:
         """Özet sheet'ini yaz"""
@@ -341,7 +388,7 @@ def read_checklist_excel(file_path: Path) -> pd.DataFrame:
 
 def create_output_excel(
     output_path: Path,
-    lines: List[str],
+    lines: List[Any],  # CardLine listesi veya string listesi
     summary_data: Dict[str, Any],
     errors: List[Dict[str, Any]],
     warnings: List[Dict[str, Any]],

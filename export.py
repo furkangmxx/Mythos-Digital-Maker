@@ -1,6 +1,8 @@
 """
-MythosCards Exporter - Excel Export
+MythosCards Exporter - Excel Export (v2.0)
 Excel çıktı dosyası oluşturma ve yazma
+
+DEĞİŞİKLİK: CardLine objelerini doğrudan Excel'e gönder (string'e çevirmeden)
 """
 
 import logging
@@ -65,8 +67,9 @@ class ExportManager:
             series_dir = create_series_dir(series_name)
             output_file = series_dir / f"{safe_filename(series_name)}_Excel.xlsx"
             
-            # String satırları
-            line_strings = lines_to_strings(lines)
+            # ÖNEMLİ: CardLine objelerini doğrudan gönder (string'e çevirmeden!)
+            # Eski kod: line_strings = lines_to_strings(lines)
+            # Yeni kod: lines'ı doğrudan gönder
             
             # Özet
             summary = self._generate_series_summary(lines)
@@ -78,10 +81,10 @@ class ExportManager:
             # Config
             export_config = self._build_export_config(series_name)
             
-            # Excel oluştur
+            # Excel oluştur - CardLine listesi gönder
             final_path = create_output_excel(
                 output_file,
-                line_strings,
+                lines,  # ← DEĞİŞTİ: CardLine listesi (string değil!)
                 summary,
                 series_errors,
                 series_warnings,
@@ -272,12 +275,11 @@ def create_single_excel_file(output_path: Path,
     
     # Satırları sırala
     sorted_lines = sort_card_lines_turkish(lines)
-    line_strings = lines_to_strings(sorted_lines)
     
-    # Excel oluştur
+    # CardLine objelerini doğrudan gönder
     return create_output_excel(
         output_path,
-        line_strings, 
+        sorted_lines,  # CardLine listesi
         summary,
         errors,
         warnings,
@@ -373,15 +375,15 @@ def create_export_result(files: List[Path],
 if __name__ == "__main__":
     # Test
     import logging
-    from .expand import CardLine
+    from expand import CardLine
     
     logging.basicConfig(level=logging.INFO)
     
     # Test data
     test_lines = [
-        CardLine("Okan Buruk Duo (1/25)", "Okan Buruk", "Duo", "/25", 25, 1, False, "Test Series", None),
-        CardLine("Mario Jardel Trio (1/5)", "Mario Jardel", "Trio", "/5", 5, 1, True, "Test Series", None),
-        CardLine("78X Fernando Muslera Goalkeeper Base", "Fernando Muslera", "Goalkeeper", "Base", 78, 78, False, "Test Series", None)
+        CardLine("Okan Buruk Duo (1/25)", "Okan Buruk", "Duo", "/25", 25, 1, False, "Test Series", "Grup A"),
+        CardLine("Mario Jardel Trio (1/5)", "Mario Jardel", "Trio", "/5", 5, 1, True, "Test Series", "Grup B"),
+        CardLine("Fernando Muslera Goalkeeper Base", "Fernando Muslera", "Goalkeeper", "Base", 78, 78, False, "Test Series", None)
     ]
     
     test_errors = []
