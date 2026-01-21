@@ -112,32 +112,123 @@ class MatchResult:
 
 class ImageMatcher:
     """Part 2 ana sınıf - Yapılandırılmış eşleştirme"""
-    
-    def __init__(self, excel_file: Path, image_dir: Path, 
-                 date_str: str = None, add_date_prefix: bool = False):
+
+    def __init__(self, excel_file: Path, image_dir: Path,
+                 date_str: str = None, add_date_prefix: bool = False,
+                 strict_mode: bool = True):
         self.excel_file = Path(excel_file)
         self.image_dir = Path(image_dir)
         self.date_str = date_str or datetime.now().strftime("%Y%m%d")
         self.add_date_prefix = add_date_prefix
-        
+        self.strict_mode = strict_mode  # Fazla kelime varsa eşleşmesin
+
         self.matches: List[MatchResult] = []
         self.image_files: List[Path] = []
         self.parsed_files: Dict[str, FileInfo] = {}
         self.stats = {'found': 0, 'missing': 0, 'conflict': 0}
+        self.unique_groups: Dict[tuple, List[int]] = {}  # Performans için
         
+    def validate_preview(self) -> Dict[str, any]:
+        """
+        ÖN DOĞRULAMA - Eşleştirme yapmadan önce preview/istatistik
+
+        Part 1'deki Doğrula mantığı gibi, eşleştirme öncesi kontrol
+        """
+        logger.info("=== ÖN DOĞRULAMA BAŞLIYOR ===")
+
+        try:
+            # 1. Görsel dosyalarını tara
+            self._scan_and_parse_images()
+
+            # 2. Excel'den kartları oku
+            cards = self._read_cards_from_excel()
+
+            # 3. Unique kombinasyonları grupla
+            unique_groups: Dict[tuple, List[CardInfo]] = {}
+            for card in cards:
+                key = (
+                    card.player_norm,
+                    card.series_norm,
+                    card.group_norm,
+                    card.denominator,
+                    card.is_signed,
+                    card.is_base
+                )
+                if key not in unique_groups:
+                    unique_groups[key] = []
+                unique_groups[key].append(card)
+
+            # 4. Her unique için preview eşleştirme yap (gerçek eşleştirme değil)
+            preview_stats = {'found': 0, 'missing': 0, 'conflict': 0}
+            detailed_results = []
+
+            for key, group_cards in unique_groups.items():
+                representative = group_cards[0]
+                result = self._match_single_card(representative)
+
+                preview_stats[result.status] += len(group_cards)
+
+                detailed_results.append({
+                    'combination': f"{representative.player} | {representative.series} | {representative.group} | /{representative.denominator} | {'İmzalı' if representative.is_signed else 'Normal'}",
+                    'card_count': len(group_cards),
+                    'status': result.status,
+                    'matched_file': result.matched_file if result.status == 'found' else None,
+                    'score': result.match_score
+                })
+
+            # 5. Yüzde hesapla
+            total_cards = len(cards)
+            found_percent = (preview_stats['found'] / total_cards * 100) if total_cards > 0 else 0
+            missing_percent = (preview_stats['missing'] / total_cards * 100) if total_cards > 0 else 0
+            conflict_percent = (preview_stats['conflict'] / total_cards * 100) if total_cards > 0 else 0
+
+            # 6. Rapor oluştur
+            preview_report = {
+                'total_cards': total_cards,
+                'unique_combinations': len(unique_groups),
+                'total_images': len(self.image_files),
+                'estimated_matches': {
+                    'found': preview_stats['found'],
+                    'found_percent': found_percent,
+                    'missing': preview_stats['missing'],
+                    'missing_percent': missing_percent,
+                    'conflict': preview_stats['conflict'],
+                    'conflict_percent': conflict_percent
+                },
+                'detailed_results': detailed_results,
+                'strict_mode': self.strict_mode,
+                'performance_gain': f"{len(cards) / len(unique_groups):.1f}x"
+            }
+
+            logger.info(f"Toplam Kart: {total_cards}")
+            logger.info(f"Unique Kombinasyon: {len(unique_groups)}")
+            logger.info(f"Toplam Görsel: {len(self.image_files)}")
+            logger.info(f"TAHMİNİ EŞLEŞMEsı:")
+            logger.info(f"  ✅ Bulunacak: {preview_stats['found']} (%{found_percent:.1f})")
+            logger.info(f"  ❌ Eksik: {preview_stats['missing']} (%{missing_percent:.1f})")
+            logger.info(f"  ⚠️  Çakışma: {preview_stats['conflict']} (%{conflict_percent:.1f})")
+            logger.info(f"Performans Kazancı: {len(cards) / len(unique_groups):.1f}x")
+
+            return preview_report
+
+        except Exception as e:
+            logger.error(f"Ön doğrulama hatası: {str(e)}")
+            raise
+
     def process_all(self) -> Dict[str, any]:
         """Ana işlem"""
         logger.info(f"Part 2 başlıyor - Excel: {self.excel_file.name}")
         logger.info(f"Tarih ekleme: {'Açık' if self.add_date_prefix else 'Kapalı'}")
-        
+        logger.info(f"Strict Mode: {'Açık (fazla kelime reddedilir)' if self.strict_mode else 'Kapalı'}")
+
         try:
             # 1. Görsel dosyalarını tara ve parse et
             self._scan_and_parse_images()
-            
+
             # 2. Excel'den kart bilgilerini oku
             cards = self._read_cards_from_excel()
-            
-            # 3. Her kart için eşleştirme yap
+
+            # 3. Her kart için eşleştirme yap (unique grouping ile)
             self._match_all_cards(cards)
 
             # 4. Backup al (sadece rename edilecekler için)
@@ -153,7 +244,7 @@ class ImageMatcher:
 
             # 7. Rapor
             return self._generate_report()
-            
+
         except Exception as e:
             logger.error(f"Part 2 hatası: {str(e)}")
             raise
@@ -311,28 +402,68 @@ class ImageMatcher:
             raise ValueError(f"Excel okuma hatası: {str(e)}")
     
     def _match_all_cards(self, cards: List[CardInfo]) -> None:
-        """Tüm kartları eşleştir"""
+        """
+        Tüm kartları eşleştir - UNIQUE GROUPING ile performans optimizasyonu
+
+        Aynı (player, series, group, denom, signed) kombinasyonu için sadece 1 kez arama yap
+        """
+        # 1. Unique kombinasyonları grupla
+        unique_groups: Dict[tuple, List[CardInfo]] = {}
+
         for card in cards:
+            key = (
+                card.player_norm,
+                card.series_norm,
+                card.group_norm,
+                card.denominator,
+                card.is_signed,
+                card.is_base
+            )
+
+            if key not in unique_groups:
+                unique_groups[key] = []
+            unique_groups[key].append(card)
+
+        logger.info(f"Toplam {len(cards)} kart → {len(unique_groups)} unique kombinasyon")
+        logger.info(f"Performans kazancı: {len(cards) / len(unique_groups):.1f}x daha hızlı")
+
+        # 2. Her unique kombinasyon için 1 kez eşleştir
+        for key, group_cards in unique_groups.items():
             try:
-                result = self._match_single_card(card)
-                self.matches.append(result)
-                self.stats[result.status] += 1
-                
-                # Log
+                # İlk kartı kullanarak eşleştir
+                representative_card = group_cards[0]
+                result = self._match_single_card(representative_card)
+
+                # Sonucu tüm gruptaki kartlara uygula
+                for card in group_cards:
+                    card_result = MatchResult(
+                        row_number=card.row_number,
+                        card_text=card.raw_text,
+                        status=result.status,
+                        matched_file=result.matched_file,
+                        conflict_files=result.conflict_files.copy(),
+                        log_message=result.log_message,
+                        match_score=result.match_score
+                    )
+                    self.matches.append(card_result)
+                    self.stats[result.status] += 1
+
+                # Log (sadece ilk kart için)
                 if result.status == 'found':
-                    logger.info(f"Satır {card.row_number}: ✅ Eşleşti (skor: {result.match_score:.0f}) - {result.matched_file}")
+                    logger.info(f"Grup ({len(group_cards)} kart): ✅ Eşleşti (skor: {result.match_score:.0f}) - {result.matched_file}")
                 elif result.status == 'missing':
-                    logger.warning(f"Satır {card.row_number}: ❌ Bulunamadı - {result.log_message}")
+                    logger.warning(f"Grup ({len(group_cards)} kart): ❌ Bulunamadı - {result.log_message}")
                 else:  # conflict
-                    logger.error(f"Satır {card.row_number}: ⚠️ CONFLICT - {len(result.conflict_files)} dosya")
-                    
+                    logger.error(f"Grup ({len(group_cards)} kart): ⚠️ CONFLICT - {len(result.conflict_files)} dosya")
+
             except Exception as e:
-                logger.error(f"Satır {card.row_number} hatası: {str(e)}")
-                self.matches.append(MatchResult(
-                    card.row_number, card.raw_text, "missing",
-                    log_message=f"Hata: {str(e)}"
-                ))
-                self.stats['missing'] += 1
+                logger.error(f"Grup hatası: {str(e)}")
+                for card in group_cards:
+                    self.matches.append(MatchResult(
+                        card.row_number, card.raw_text, "missing",
+                        log_message=f"Hata: {str(e)}"
+                    ))
+                    self.stats['missing'] += 1
     
     def _match_single_card(self, card: CardInfo) -> MatchResult:
         """
@@ -406,13 +537,17 @@ class ImageMatcher:
             # Tam eşleşme: 100
             # Her eksik parça: -20 (kritik)
             # Her fazla parça: -15 (önemli - TO THE FINALS PATCH gibi)
-            
+
             if missing_parts > 0:
                 # Eksik parça varsa eşleşme yok
                 continue
-            
+
+            # STRICT MODE: Fazla kelime varsa eşleşme yok
+            if self.strict_mode and extra_parts > 0:
+                continue
+
             score = 100 - (extra_parts * 15)
-            
+
             if score >= 70:  # Minimum eşik
                 candidates.append((filename, score, extra_parts))
         
@@ -604,14 +739,41 @@ class ImageMatcher:
 
 
 # Public API
-def process_image_mapping(excel_file: str, image_dir: str, 
-                         date: str = None, add_date_prefix: bool = False) -> Dict[str, any]:
+def validate_matching_preview(excel_file: str, image_dir: str,
+                              date: str = None, strict_mode: bool = True) -> Dict[str, any]:
+    """
+    ÖN DOĞRULAMA - Eşleştirme yapmadan önce preview/istatistik
+
+    Part 1'deki Doğrula mantığı gibi çalışır.
+    Gerçek eşleştirme yapmadan kaç kartın eşleşeceğini gösterir.
+
+    Returns:
+        Dict with:
+        - total_cards: Toplam kart sayısı
+        - unique_combinations: Unique kombinasyon sayısı
+        - estimated_matches: Tahmini eşleşme istatistikleri
+        - detailed_results: Detaylı sonuçlar
+    """
+    matcher = ImageMatcher(
+        Path(excel_file),
+        Path(image_dir),
+        date,
+        add_date_prefix=False,  # Preview'da rename yok
+        strict_mode=strict_mode
+    )
+    return matcher.validate_preview()
+
+
+def process_image_mapping(excel_file: str, image_dir: str,
+                         date: str = None, add_date_prefix: bool = False,
+                         strict_mode: bool = True) -> Dict[str, any]:
     """Part 2 ana fonksiyon"""
     matcher = ImageMatcher(
-        Path(excel_file), 
-        Path(image_dir), 
+        Path(excel_file),
+        Path(image_dir),
         date,
-        add_date_prefix
+        add_date_prefix,
+        strict_mode
     )
     return matcher.process_all()
 
@@ -619,13 +781,13 @@ def process_image_mapping(excel_file: str, image_dir: str,
 def validate_image_inputs(excel_file: str, image_dir: str) -> List[str]:
     """Input validation"""
     issues = []
-    
+
     if not Path(excel_file).exists():
         issues.append(f"Excel dosyası yok: {excel_file}")
-    
+
     if not Path(image_dir).exists():
         issues.append(f"Görsel klasörü yok: {image_dir}")
-    
+
     return issues
 
 
