@@ -418,26 +418,33 @@ class MythosGUI:
         # Tarih checkbox ve entry - tek satırda
         date_options_frame = ttk.Frame(part2_frame)
         date_options_frame.grid(row=2, column=0, columnspan=3, pady=(8, 0))
-        
+
         # Checkbox: Tarih Ekle
         ttk.Checkbutton(
-            date_options_frame, 
-            text="Tarih Ekle", 
+            date_options_frame,
+            text="Tarih Ekle",
             variable=self.add_date_var
         ).pack(side=tk.LEFT, padx=(0, 10))
-        
+
         # Tarih entry
         ttk.Label(date_options_frame, text="Tarih:").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Entry(date_options_frame, textvariable=self.date_var, width=10).pack(side=tk.LEFT, padx=(0, 15))
-        
-        # Eşleştir butonu
+
+        # Butonlar - Part 1'deki gibi
         ttk.Button(
-            date_options_frame, 
-            text="Görselleri Eşleştir", 
-            command=self.match_images, 
+            date_options_frame,
+            text="Kontrol Et",
+            command=self.validate_images_preview,
+            width=12
+        ).pack(side=tk.LEFT, padx=3)
+
+        ttk.Button(
+            date_options_frame,
+            text="Görselleri Eşleştir",
+            command=self.match_images,
             width=18
-        ).pack(side=tk.LEFT)
-        
+        ).pack(side=tk.LEFT, padx=3)
+
         part2_frame.columnconfigure(1, weight=1)
         
         # === Progress ve Status - tek satırda ===
@@ -735,10 +742,100 @@ class MythosGUI:
             filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
         )
         if filename:
-            self.part2_excel_var.set(filename)     
+            self.part2_excel_var.set(filename)
+
+    def validate_images_preview(self):
+        """Part 2: Görsel eşleştirme önizleme - Sadece kontrol, eşleştirme yapma"""
+        excel_file = self.part2_excel_var.get()
+        if not excel_file:
+            messagebox.showerror("Hata", "Lütfen Excel dosyası seçin")
+            return
+
+        if not self.image_dir_var.get():
+            messagebox.showerror("Hata", "Lütfen görsel klasörü seçin")
+            return
+
+        self.log_text.delete(1.0, tk.END)
+        self.log_message("Part 2: Görsel Eşleştirme Kontrolü...")
+
+        # Tarih ekleme durumunu logla
+        add_date = self.add_date_var.get()
+        if add_date:
+            self.log_message(f"📅 Tarih eklenecek: {self.date_var.get()}")
+        else:
+            self.log_message("📅 Tarih ekleme KAPALI")
+
+        try:
+            # ÖN DOĞRULAMA - Preview/İstatistik
+            self.log_message("\n" + "="*50)
+            self.log_message("ÖN DOĞRULAMA - Eşleştirme İstatistikleri")
+            self.log_message("="*50)
+
+            preview = validate_matching_preview(
+                excel_file,
+                self.image_dir_var.get(),
+                self.date_var.get() if add_date else None,
+                strict_mode=True  # Fazla kelime reddedilir
+            )
+
+            # Preview sonuçlarını logla
+            self.log_message(f"📊 Toplam Kart: {preview['total_cards']}")
+            self.log_message(f"🔍 Unique Kombinasyon: {preview['unique_combinations']}")
+            self.log_message(f"🖼️  Toplam Görsel: {preview['total_images']}")
+            self.log_message(f"⚡ Performans Kazancı: {preview['performance_gain']} hızlı")
+            self.log_message(f"🔒 Strict Mode: {'AÇIK (fazla kelime reddedilir)' if preview['strict_mode'] else 'KAPALI'}")
+
+            self.log_message("\nTAHMİNİ EŞLEŞMEsı:")
+            est = preview['estimated_matches']
+            self.log_message(f"  ✅ Bulunacak: {est['found']} (%{est['found_percent']:.1f})")
+            self.log_message(f"  ❌ Eksik: {est['missing']} (%{est['missing_percent']:.1f})")
+            self.log_message(f"  ⚠️  Çakışma: {est['conflict']} (%{est['conflict_percent']:.1f})")
+
+            # Detaylı sonuçları göster (ilk 5)
+            if preview['detailed_results']:
+                self.log_message("\nDetaylı Önizleme (ilk 5 kombinasyon):")
+                for i, detail in enumerate(preview['detailed_results'][:5], 1):
+                    status_icon = "✅" if detail['status'] == 'found' else "❌" if detail['status'] == 'missing' else "⚠️"
+                    self.log_message(f"  {status_icon} {detail['combination']} → {detail['card_count']} kart")
+                    if detail['matched_file']:
+                        self.log_message(f"     Dosya: {detail['matched_file']}")
+
+            self.log_message("\n" + "="*50)
+
+            # Sonuç mesajı
+            if est['found_percent'] >= 80:
+                self.log_message("✅ Kontrol BAŞARILI! Eşleştirme yapabilirsiniz.")
+                messagebox.showinfo(
+                    "Kontrol Başarılı",
+                    f"Eşleştirme kontrolü tamamlandı!\n\n"
+                    f"✅ Bulunacak: {est['found']} kart (%{est['found_percent']:.1f})\n"
+                    f"❌ Eksik: {est['missing']} kart (%{est['missing_percent']:.1f})\n\n"
+                    f"'Görselleri Eşleştir' butonuna tıklayarak devam edebilirsiniz."
+                )
+            elif est['missing_percent'] > 50:
+                self.log_message("⚠️  UYARI: Yarıdan fazla kart eşleşmeyecek!")
+                messagebox.showwarning(
+                    "Dikkat - Çok Eksik",
+                    f"UYARI: Kartların %{est['missing_percent']:.1f}'si eşleşmeyecek!\n\n"
+                    f"✅ Bulunacak: {est['found']} kart\n"
+                    f"❌ Eksik: {est['missing']} kart\n\n"
+                    f"Lütfen görsel dosyalarını kontrol edin."
+                )
+            else:
+                self.log_message("💡 Öneri: Eşleştirme yapabilirsiniz.")
+                messagebox.showinfo(
+                    "Kontrol Tamamlandı",
+                    f"Eşleştirme kontrolü tamamlandı!\n\n"
+                    f"✅ Bulunacak: {est['found']} kart (%{est['found_percent']:.1f})\n"
+                    f"❌ Eksik: {est['missing']} kart (%{est['missing_percent']:.1f})"
+                )
+
+        except Exception as e:
+            self.log_message(f"❌ Kontrol hatası: {str(e)}")
+            messagebox.showerror("Hata", f"Kontrol hatası: {str(e)}")     
 
     def match_images(self):
-            """Görsel eşleştirme işlemi"""
+            """Görsel eşleştirme işlemi - Direkt eşleştir (ön doğrulama yok)"""
             # Excel kontrolü
             excel_file = self.part2_excel_var.get()
             if not excel_file:
@@ -759,58 +856,10 @@ class MythosGUI:
             else:
                 self.log_message("📅 Tarih ekleme KAPALI")
 
+            self.log_message(f"🔒 Strict Mode: AÇIK (fazla kelime reddedilir)")
+            self.log_message("\n🚀 Eşleştirme başlıyor...\n")
+
             try:
-                # ÖN DOĞRULAMA - Preview/İstatistik
-                self.log_message("\n" + "="*50)
-                self.log_message("ÖN DOĞRULAMA - Eşleştirme İstatistikleri")
-                self.log_message("="*50)
-
-                preview = validate_matching_preview(
-                    excel_file,
-                    self.image_dir_var.get(),
-                    self.date_var.get() if add_date else None,
-                    strict_mode=True  # Fazla kelime reddedilir
-                )
-
-                # Preview sonuçlarını logla
-                self.log_message(f"📊 Toplam Kart: {preview['total_cards']}")
-                self.log_message(f"🔍 Unique Kombinasyon: {preview['unique_combinations']}")
-                self.log_message(f"🖼️  Toplam Görsel: {preview['total_images']}")
-                self.log_message(f"⚡ Performans Kazancı: {preview['performance_gain']} hızlı")
-                self.log_message(f"🔒 Strict Mode: {'AÇIK (fazla kelime reddedilir)' if preview['strict_mode'] else 'KAPALI'}")
-
-                self.log_message("\nTAHMİNİ EŞLEŞMEsı:")
-                est = preview['estimated_matches']
-                self.log_message(f"  ✅ Bulunacak: {est['found']} (%{est['found_percent']:.1f})")
-                self.log_message(f"  ❌ Eksik: {est['missing']} (%{est['missing_percent']:.1f})")
-                self.log_message(f"  ⚠️  Çakışma: {est['conflict']} (%{est['conflict_percent']:.1f})")
-
-                # Detaylı sonuçları göster (ilk 5)
-                if preview['detailed_results']:
-                    self.log_message("\nDetaylı Önizleme (ilk 5 kombinasyon):")
-                    for i, detail in enumerate(preview['detailed_results'][:5], 1):
-                        status_icon = "✅" if detail['status'] == 'found' else "❌" if detail['status'] == 'missing' else "⚠️"
-                        self.log_message(f"  {status_icon} {detail['combination']} → {detail['card_count']} kart")
-                        if detail['matched_file']:
-                            self.log_message(f"     Dosya: {detail['matched_file']}")
-
-                self.log_message("\n" + "="*50)
-
-                # Kullanıcıya sor: Devam edilsin mi?
-                if est['missing_percent'] > 50:
-                    if not messagebox.askyesno(
-                        "Uyarı - Çok Fazla Eksik",
-                        f"UYARI: Kartların %{est['missing_percent']:.1f}'si eşleşmeyecek!\n\n"
-                        f"Bulunacak: {est['found']} kart\n"
-                        f"Eksik: {est['missing']} kart\n\n"
-                        f"Yine de devam etmek istiyor musunuz?"
-                    ):
-                        self.log_message("❌ İşlem kullanıcı tarafından iptal edildi")
-                        return
-
-                # Eşleştirmeyi başlat
-                self.log_message("\n🚀 Gerçek eşleştirme başlıyor...")
-
                 result = process_image_mapping(
                     excel_file,
                     self.image_dir_var.get(),
@@ -819,7 +868,7 @@ class MythosGUI:
                     strict_mode=True  # Fazla kelime reddedilir
                 )
 
-                self.log_message(f"\n✅ TAMAMLANDI!")
+                self.log_message(f"✅ TAMAMLANDI!")
                 self.log_message(f"✅ Bulunan: {result['found_count']}/{result['total_cards']}")
                 self.log_message(f"❌ Eksik: {result['missing_count']}")
                 self.log_message(f"⚠️ Çakışma: {result['conflict_count']}")
