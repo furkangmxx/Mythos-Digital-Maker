@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import click
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from images import process_image_mapping, validate_image_inputs
+from images import process_image_mapping, validate_image_inputs, validate_matching_preview
 from datetime import datetime
 
 # Path düzeltmesi PyInstaller için
@@ -259,17 +259,19 @@ def list_command(input_file, outdir, per_series, dry_run, locale):
 @cli.command('images')
 @click.option('--excel', required=True, type=click.Path(exists=True),
               help='Part 1 Excel çıktı dosyası')
-@click.option('--imgdir', required=True, type=click.Path(exists=True),  
+@click.option('--imgdir', required=True, type=click.Path(exists=True),
               help='Görsel dosyalarının klasörü')
 @click.option('--date', default=None, type=str,
               help='YYYYMMDD format (varsayılan: bugün)')
-def images_command(excel, imgdir, date):
+@click.option('--skip-preview', is_flag=True, default=False,
+              help='Ön doğrulamayı atla')
+def images_command(excel, imgdir, date, skip_preview):
     """Part 2: Görselleri kartlara eşleştir"""
-    
+
     click.echo(f"Excel: {excel}")
     click.echo(f"Görseller: {imgdir}")
     click.echo(f"Tarih: {date or 'bugün'}")
-    
+
     # Validation
     issues = validate_image_inputs(excel, imgdir)
     if issues:
@@ -277,26 +279,52 @@ def images_command(excel, imgdir, date):
         for issue in issues:
             click.echo(f"  - {issue}")
         sys.exit(1)
-    
+
     try:
-        click.echo("Görsel eşleştirme başlıyor...")
-        result = process_image_mapping(excel, imgdir, date)
-        
+        # ÖN DOĞRULAMA (eğer atlanmadıysa)
+        if not skip_preview:
+            click.echo("\n" + "="*50)
+            click.echo("ÖN DOĞRULAMA - Eşleştirme İstatistikleri")
+            click.echo("="*50)
+
+            preview = validate_matching_preview(excel, imgdir, date, strict_mode=True)
+
+            click.echo(f"📊 Toplam Kart: {preview['total_cards']}")
+            click.echo(f"🔍 Unique Kombinasyon: {preview['unique_combinations']}")
+            click.echo(f"🖼️  Toplam Görsel: {preview['total_images']}")
+            click.echo(f"⚡ Performans: {preview['performance_gain']} hızlı")
+
+            click.echo("\nTAHMİNİ EŞLEŞMEsı:")
+            est = preview['estimated_matches']
+            click.echo(f"  ✅ Bulunacak: {est['found']} (%{est['found_percent']:.1f})")
+            click.echo(f"  ❌ Eksik: {est['missing']} (%{est['missing_percent']:.1f})")
+            click.echo(f"  ⚠️  Çakışma: {est['conflict']} (%{est['conflict_percent']:.1f})")
+            click.echo("="*50 + "\n")
+
+            # Kullanıcıya sor
+            if est['missing_percent'] > 50:
+                if not click.confirm(f"⚠️  UYARI: %{est['missing_percent']:.1f} eksik olacak. Devam edilsin mi?"):
+                    click.echo("❌ İşlem iptal edildi")
+                    sys.exit(0)
+
+        click.echo("🚀 Görsel eşleştirme başlıyor...")
+        result = process_image_mapping(excel, imgdir, date, add_date_prefix=False, strict_mode=True)
+
         # Sonuç
-        click.echo(f"TAMAMLANDI!")
+        click.echo(f"\n✅ TAMAMLANDI!")
         click.echo(f"Toplam: {result['total_cards']}")
         click.echo(f"Bulunan: {result['found_count']}")
         click.echo(f"Eksik: {result['missing_count']}")
         click.echo(f"Çakışma: {result['conflict_count']}")
         click.echo(f"Başarı: {result['success_rate']:.1f}%")
-        
+
         if result['warnings']:
-            click.echo(f"UYARILAR ({len(result['warnings'])}):")
+            click.echo(f"\nUYARILAR ({len(result['warnings'])}):")
             for w in result['warnings'][:5]:
                 click.echo(f"  Satır {w['row']}: {w['message']}")
-        
+
     except Exception as e:
-        click.echo(f"HATA: {str(e)}")
+        click.echo(f"❌ HATA: {str(e)}")
         sys.exit(1)
 
 # GUI Implementation
@@ -716,52 +744,104 @@ class MythosGUI:
             if not excel_file:
                 messagebox.showerror("Hata", "Lütfen Excel dosyası seçin")
                 return
-            
+
             if not self.image_dir_var.get():
                 messagebox.showerror("Hata", "Lütfen görsel klasörü seçin")
                 return
-            
+
             self.log_text.delete(1.0, tk.END)
-            self.log_message("Part 2 başlıyor...")
-            
+            self.log_message("Part 2: Görsel Eşleştirme başlıyor...")
+
             # Tarih ekleme durumunu logla
             add_date = self.add_date_var.get()
             if add_date:
                 self.log_message(f"📅 Tarih eklenecek: {self.date_var.get()}")
             else:
                 self.log_message("📅 Tarih ekleme KAPALI")
-            
+
             try:
+                # ÖN DOĞRULAMA - Preview/İstatistik
+                self.log_message("\n" + "="*50)
+                self.log_message("ÖN DOĞRULAMA - Eşleştirme İstatistikleri")
+                self.log_message("="*50)
+
+                preview = validate_matching_preview(
+                    excel_file,
+                    self.image_dir_var.get(),
+                    self.date_var.get() if add_date else None,
+                    strict_mode=True  # Fazla kelime reddedilir
+                )
+
+                # Preview sonuçlarını logla
+                self.log_message(f"📊 Toplam Kart: {preview['total_cards']}")
+                self.log_message(f"🔍 Unique Kombinasyon: {preview['unique_combinations']}")
+                self.log_message(f"🖼️  Toplam Görsel: {preview['total_images']}")
+                self.log_message(f"⚡ Performans Kazancı: {preview['performance_gain']} hızlı")
+                self.log_message(f"🔒 Strict Mode: {'AÇIK (fazla kelime reddedilir)' if preview['strict_mode'] else 'KAPALI'}")
+
+                self.log_message("\nTAHMİNİ EŞLEŞMEsı:")
+                est = preview['estimated_matches']
+                self.log_message(f"  ✅ Bulunacak: {est['found']} (%{est['found_percent']:.1f})")
+                self.log_message(f"  ❌ Eksik: {est['missing']} (%{est['missing_percent']:.1f})")
+                self.log_message(f"  ⚠️  Çakışma: {est['conflict']} (%{est['conflict_percent']:.1f})")
+
+                # Detaylı sonuçları göster (ilk 5)
+                if preview['detailed_results']:
+                    self.log_message("\nDetaylı Önizleme (ilk 5 kombinasyon):")
+                    for i, detail in enumerate(preview['detailed_results'][:5], 1):
+                        status_icon = "✅" if detail['status'] == 'found' else "❌" if detail['status'] == 'missing' else "⚠️"
+                        self.log_message(f"  {status_icon} {detail['combination']} → {detail['card_count']} kart")
+                        if detail['matched_file']:
+                            self.log_message(f"     Dosya: {detail['matched_file']}")
+
+                self.log_message("\n" + "="*50)
+
+                # Kullanıcıya sor: Devam edilsin mi?
+                if est['missing_percent'] > 50:
+                    if not messagebox.askyesno(
+                        "Uyarı - Çok Fazla Eksik",
+                        f"UYARI: Kartların %{est['missing_percent']:.1f}'si eşleşmeyecek!\n\n"
+                        f"Bulunacak: {est['found']} kart\n"
+                        f"Eksik: {est['missing']} kart\n\n"
+                        f"Yine de devam etmek istiyor musunuz?"
+                    ):
+                        self.log_message("❌ İşlem kullanıcı tarafından iptal edildi")
+                        return
+
+                # Eşleştirmeyi başlat
+                self.log_message("\n🚀 Gerçek eşleştirme başlıyor...")
+
                 result = process_image_mapping(
                     excel_file,
-                    self.image_dir_var.get(), 
+                    self.image_dir_var.get(),
                     self.date_var.get() if add_date else None,
-                    add_date_prefix=add_date
+                    add_date_prefix=add_date,
+                    strict_mode=True  # Fazla kelime reddedilir
                 )
-                
-                self.log_message(f"\nTAMAMLANDI!")
+
+                self.log_message(f"\n✅ TAMAMLANDI!")
                 self.log_message(f"✅ Bulunan: {result['found_count']}/{result['total_cards']}")
                 self.log_message(f"❌ Eksik: {result['missing_count']}")
                 self.log_message(f"⚠️ Çakışma: {result['conflict_count']}")
-                self.log_message(f"Başarı: {result['success_rate']:.1f}%")
-                
+                self.log_message(f"📈 Başarı Oranı: {result['success_rate']:.1f}%")
+
                 if result['warnings']:
                     self.log_message(f"\n--- UYARILAR ({len(result['warnings'])}) ---")
                     for w in result['warnings'][:5]:
                         self.log_message(f"  Satır {w['row']}: {w['message']}")
                     if len(result['warnings']) > 5:
                         self.log_message(f"  ... ve {len(result['warnings'])-5} uyarı daha")
-                
+
                 if result['conflict_count'] > 0:
                     messagebox.showwarning(
-                        "Çakışmalar Var", 
+                        "Çakışmalar Var",
                         f"Eşleştirme tamamlandı!\n"
                         f"Başarı: {result['success_rate']:.1f}%\n\n"
                         f"⚠️ {result['conflict_count']} çakışma var!"
                     )
                 else:
-                    messagebox.showinfo("Başarılı", f"Başarı: {result['success_rate']:.1f}%")
-                
+                    messagebox.showinfo("Başarılı", f"Eşleştirme başarılı!\nBaşarı oranı: {result['success_rate']:.1f}%")
+
             except Exception as e:
                 self.log_message(f"❌ HATA: {str(e)}")
                 messagebox.showerror("Hata", str(e))
