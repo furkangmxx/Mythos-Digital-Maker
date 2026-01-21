@@ -30,19 +30,45 @@ SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 
 
 def normalize_for_matching(text: str) -> str:
-    """Eşleştirme için normalize et"""
+    """
+    Eşleştirme için normalize et
+
+    Kurallar:
+    1. Türkçe karakterler → ASCII (ğ→g, ş→s, vb.)
+    2. Küçük harf
+    3. Tire (-) → alt çizgi (_)
+    4. Boşluk → alt çizgi (_)
+    5. Diğer özel karakterler (., ', vb.) → SİLİNİR
+    6. Çoklu alt çizgi → tek alt çizgi
+
+    Örnekler:
+    - "T.C. Buruk" → "tc_buruk"
+    - "Okan's Goal" → "okans_goal"
+    - "İçer-dışarı" → "icer_disari"
+    - "Arda Güler" → "arda_guler"
+    """
     if not text:
         return ""
-    # Türkçe → ASCII
+
+    # 1. Türkçe → ASCII
     normalized = str(text).translate(TURKISH_TO_ASCII)
-    # Küçük harf
+
+    # 2. Küçük harf
     normalized = normalized.lower()
-    # Boşluk ve özel karakterler → alt çizgi
-    normalized = re.sub(r'[^a-z0-9]', '_', normalized)
-    # Çoklu alt çizgi → tek
+
+    # 3. Tire ve boşluk → alt çizgi (ÖNCE bu işlemi yap)
+    normalized = normalized.replace('-', '_')
+    normalized = normalized.replace(' ', '_')
+
+    # 4. Diğer özel karakterleri SİL (a-z, 0-9, alt çizgi dışındaki her şey)
+    normalized = re.sub(r'[^a-z0-9_]', '', normalized)
+
+    # 5. Çoklu alt çizgi → tek
     normalized = re.sub(r'_+', '_', normalized)
-    # Baş/son alt çizgi temizle
+
+    # 6. Baş/son alt çizgi temizle
     normalized = normalized.strip('_')
+
     return normalized
 
 
@@ -77,8 +103,8 @@ class CardInfo:
             parts.extend(self.series_norm.split('_'))
         if self.group_norm:
             parts.extend(self.group_norm.split('_'))
-        # Boş ve kısa olanları filtrele
-        return [p for p in parts if len(p) >= 2]
+        # Sadece boş olanları filtrele (KISA olanları ATMA - X gibi tek harfler önemli!)
+        return [p for p in parts if p]
 
 
 @dataclass
@@ -323,8 +349,9 @@ class ImageMatcher:
         
         # İçerik parçaları
         all_parts = name.split('_')
-        content_parts = [p for p in all_parts if len(p) >= 2]
-        
+        # Sadece boş olanları filtrele (KISA olanları ATMA - X gibi tek harfler önemli!)
+        content_parts = [p for p in all_parts if p]
+
         return FileInfo(
             original_name=original,
             has_date=has_date,
