@@ -287,7 +287,7 @@ def images_command(excel, imgdir, date, skip_preview):
             click.echo("ÖN DOĞRULAMA - Eşleştirme İstatistikleri")
             click.echo("="*50)
 
-            preview = validate_matching_preview(excel, imgdir, date, strict_mode=True)
+            preview = validate_matching_preview(excel, imgdir, date, strict_mode=False)
 
             click.echo(f"📊 Toplam Kart: {preview['total_cards']}")
             click.echo(f"🔍 Unique Kombinasyon: {preview['unique_combinations']}")
@@ -308,7 +308,7 @@ def images_command(excel, imgdir, date, skip_preview):
                     sys.exit(0)
 
         click.echo("🚀 Görsel eşleştirme başlıyor...")
-        result = process_image_mapping(excel, imgdir, date, add_date_prefix=False, strict_mode=True)
+        result = process_image_mapping(excel, imgdir, date, add_date_prefix=False, strict_mode=False)
 
         # Sonuç
         click.echo(f"\n✅ TAMAMLANDI!")
@@ -775,7 +775,7 @@ class MythosGUI:
                 excel_file,
                 self.image_dir_var.get(),
                 self.date_var.get() if add_date else None,
-                strict_mode=True  # Fazla kelime reddedilir
+                strict_mode=False  # Açıklamalı dosya isimleri için kapalı
             )
 
             # Preview sonuçlarını logla
@@ -865,7 +865,7 @@ class MythosGUI:
                     self.image_dir_var.get(),
                     self.date_var.get() if add_date else None,
                     add_date_prefix=add_date,
-                    strict_mode=True  # Fazla kelime reddedilir
+                    strict_mode=False  # Açıklamalı dosya isimleri için kapalı
                 )
 
                 self.log_message(f"✅ TAMAMLANDI!")
