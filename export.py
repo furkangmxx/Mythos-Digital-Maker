@@ -305,8 +305,8 @@ def validate_export_requirements(lines: List[CardLine]) -> List[str]:
     if lines_without_labels:
         issues.append(f"{len(lines_without_labels)} satırda label eksik")
     
-    # Variant kontrolü
-    invalid_variants = [line for line in lines if line.denominator <= 0]
+    # Variant kontrolü (sayılı denominatorlar için)
+    invalid_variants = [line for line in lines if isinstance(line.denominator, int) and line.denominator <= 0]
     if invalid_variants:
         issues.append(f"{len(invalid_variants)} satırda geçersiz payda")
     

@@ -174,8 +174,8 @@ class ChecklistValidator:
                                     f"Negatif değer: {numeric_value}"
                                 )
                             
-                            # Payda aşımı kontrolü
-                            elif numeric_value > denominator:
+                            # Payda aşımı kontrolü (sadece sayılı denominatorlar için)
+                            elif isinstance(denominator, int) and numeric_value > denominator:
                                 self._add_warning(
                                     row_idx + 2,
                                     variant_info.column_name,
@@ -183,7 +183,7 @@ class ChecklistValidator:
                                     f"Değer paydadan fazla: {numeric_value} > {denominator} (yine de {denominator} kart oluşturulacak)"
                                 )
 
-                            elif numeric_value < denominator and numeric_value > 0:
+                            elif isinstance(denominator, int) and numeric_value < denominator and numeric_value > 0:
                                 self._add_warning(
                                     row_idx + 2,
                                     variant_info.column_name,

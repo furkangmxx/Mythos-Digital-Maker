@@ -5,7 +5,7 @@ Excel başlık normalizasyonu ve variant tespiti
 
 import re
 import logging
-from typing import List, Dict, Tuple, Set, Optional
+from typing import List, Dict, Tuple, Set, Optional, Union
 from dataclasses import dataclass
 
 from utils import HeaderError, normalize_text
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class VariantInfo:
     """Variant bilgileri"""
     column_name: str
-    denominator: int
+    denominator: Union[int, str]  # 5, 25 veya "X", "Short Print"
     is_signed: bool
     display_name: str
 
@@ -39,7 +39,16 @@ class HeaderProcessor:
         "1/1": re.compile(r"^1/1$"),
         "signed_1/1": re.compile(r"^1/1\s+İmzalı$"),
         "numbered": re.compile(r"^/(\d+)$"),
-        "signed_numbered": re.compile(r"^/(\d+)\s+İmzalı$")
+        "signed_numbered": re.compile(r"^/(\d+)\s+İmzalı$"),
+        # Herhangi bir yazılı denominator (Base hariç, o ayrı işleniyor)
+        "text_denom": re.compile(r"^([A-Za-zÇçĞğİıÖöŞşÜü][A-Za-zÇçĞğİıÖöŞşÜü0-9\s]*)$"),
+        "signed_text_denom": re.compile(r"^([A-Za-zÇçĞğİıÖöŞşÜü][A-Za-zÇçĞğİıÖöŞşÜü0-9\s]*)\s+İmzalı$")
+    }
+
+    # Bu isimler yazılı denominator olarak algılanmasın
+    RESERVED_COLUMN_NAMES = {
+        "seri adı", "seri adi", "oyuncu adı", "oyuncu adi",
+        "grup", "grup (opsiyonel)", "base"
     }
     
     def __init__(self, headers: List[str]):
@@ -163,7 +172,33 @@ class HeaderProcessor:
                 is_signed=True,
                 display_name=f"/{denominator} İmzalı"
             )
-        
+
+        # Yazılı denominator İmzalı kontrolü (X İmzalı, Short Print İmzalı, vs.)
+        signed_text_match = self.VARIANT_PATTERNS["signed_text_denom"].match(normalized_header)
+        if signed_text_match:
+            denom_text = signed_text_match.group(1).strip()
+            # Reserved değilse kabul et
+            if denom_text.lower() not in self.RESERVED_COLUMN_NAMES:
+                return VariantInfo(
+                    column_name=normalized_header,
+                    denominator=denom_text,
+                    is_signed=True,
+                    display_name=f"{denom_text} İmzalı"
+                )
+
+        # Yazılı denominator kontrolü (X, Short Print, vs.)
+        text_denom_match = self.VARIANT_PATTERNS["text_denom"].match(normalized_header)
+        if text_denom_match:
+            denom_text = text_denom_match.group(1).strip()
+            # Reserved değilse kabul et
+            if denom_text.lower() not in self.RESERVED_COLUMN_NAMES:
+                return VariantInfo(
+                    column_name=normalized_header,
+                    denominator=denom_text,
+                    is_signed=False,
+                    display_name=denom_text
+                )
+
         return None
     
     def _validate_required_columns(self) -> None:
@@ -235,7 +270,7 @@ class HeaderProcessor:
         
         return custom_labels        
                     
-    def get_variant_pairs(self) -> Dict[int, Dict[str, Optional[VariantInfo]]]:
+    def get_variant_pairs(self) -> Dict[Union[int, str], Dict[str, Optional[VariantInfo]]]:
         """Variant çiftlerini al"""
         pairs = {}
         

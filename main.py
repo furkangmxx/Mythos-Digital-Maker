@@ -18,6 +18,7 @@ import click
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from images import process_image_mapping, validate_image_inputs, validate_matching_preview
+from shorten import process_shortening, validate_shortening_preview, validate_shorten_inputs
 from datetime import datetime
 
 # Path düzeltmesi PyInstaller için
@@ -334,7 +335,7 @@ class MythosGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title(f"{PROGRAM_NAME} v{PROGRAM_VERSION}")
-        self.root.geometry("600x550")
+        self.root.geometry("600x700")
         
         # Kapanma kontrolü
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -349,8 +350,13 @@ class MythosGUI:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.image_dir_var = tk.StringVar()
         self.date_var = tk.StringVar(value=datetime.now().strftime("%Y%m%d"))
-        self.part2_excel_var = tk.StringVar()    
+        self.part2_excel_var = tk.StringVar()
         self.add_date_var = tk.BooleanVar(value=False)
+
+        # Part 3 variables
+        self.part3_excel_var = tk.StringVar()
+        self.part3_image_dir_var = tk.StringVar()
+        self.max_length_var = tk.IntVar(value=97)
 
         self.setup_ui()
         # Mevcut variables'lardan sonra ekleyin:
@@ -446,10 +452,37 @@ class MythosGUI:
         ).pack(side=tk.LEFT, padx=3)
 
         part2_frame.columnconfigure(1, weight=1)
-        
+
+        # === PART 3: Dosya Adı Kısaltma ===
+        part3_frame = ttk.LabelFrame(main_frame, text="Bölüm 3: Dosya Adı Kısaltma", padding="8")
+        part3_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 8))
+
+        # Excel dosyası
+        ttk.Label(part3_frame, text="Excel Dosyası:").grid(row=0, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(part3_frame, textvariable=self.part3_excel_var, width=45).grid(row=0, column=1, padx=5, sticky=(tk.W, tk.E))
+        ttk.Button(part3_frame, text="Seç", command=self.select_part3_excel, width=6).grid(row=0, column=2)
+
+        # Görsel klasörü
+        ttk.Label(part3_frame, text="Görsel Klasörü:").grid(row=1, column=0, sticky=tk.W, pady=3)
+        ttk.Entry(part3_frame, textvariable=self.part3_image_dir_var, width=45).grid(row=1, column=1, padx=5, sticky=(tk.W, tk.E))
+        ttk.Button(part3_frame, text="Seç", command=self.select_part3_image_dir, width=6).grid(row=1, column=2)
+
+        # Max uzunluk ve butonlar
+        part3_options_frame = ttk.Frame(part3_frame)
+        part3_options_frame.grid(row=2, column=0, columnspan=3, pady=(8, 0))
+
+        ttk.Label(part3_options_frame, text="Max Uzunluk:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(part3_options_frame, textvariable=self.max_length_var, width=5).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(part3_options_frame, text="karakter").pack(side=tk.LEFT, padx=(0, 20))
+
+        ttk.Button(part3_options_frame, text="Kontrol Et", command=self.validate_shortening, width=12).pack(side=tk.LEFT, padx=3)
+        ttk.Button(part3_options_frame, text="Kısalt", command=self.shorten_filenames, width=12).pack(side=tk.LEFT, padx=3)
+
+        part3_frame.columnconfigure(1, weight=1)
+
         # === Progress ve Status - tek satırda ===
         status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 5))
+        status_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 5))
         
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(status_frame, variable=self.progress_var, maximum=100)
@@ -460,7 +493,7 @@ class MythosGUI:
         
         # === Log - daha kullanışlı boyut ===
         log_frame = ttk.LabelFrame(main_frame, text="Log", padding="5")
-        log_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S))
+        log_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         self.log_text = tk.Text(log_frame, height=6, width=70, wrap=tk.WORD)
         scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
@@ -473,7 +506,7 @@ class MythosGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(4, weight=1)
+        main_frame.rowconfigure(5, weight=1)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
@@ -881,20 +914,148 @@ class MythosGUI:
                     if len(result['warnings']) > 5:
                         self.log_message(f"  ... ve {len(result['warnings'])-5} uyarı daha")
 
+                # Sonuç mesajı oluştur
+                msg = (
+                    f"Eşleştirme tamamlandı!\n\n"
+                    f"✅ Bulunan: {result['found_count']}/{result['total_cards']}\n"
+                    f"❌ Eksik: {result['missing_count']}\n"
+                    f"📈 Başarı: {result['success_rate']:.1f}%\n"
+                )
                 if result['conflict_count'] > 0:
-                    messagebox.showwarning(
-                        "Çakışmalar Var",
-                        f"Eşleştirme tamamlandı!\n"
-                        f"Başarı: {result['success_rate']:.1f}%\n\n"
-                        f"⚠️ {result['conflict_count']} çakışma var!"
-                    )
-                else:
-                    messagebox.showinfo("Başarılı", f"Eşleştirme başarılı!\nBaşarı oranı: {result['success_rate']:.1f}%")
+                    msg += f"\n⚠️ {result['conflict_count']} çakışma var!"
+
+                msg += "\n\nExcel dosyasının bulunduğu klasörü açmak ister misiniz?"
+
+                if messagebox.askyesno("Tamamlandı", msg):
+                    import os
+                    import platform
+                    # Excel dosyasının bulunduğu klasörü aç
+                    excel_dir = os.path.dirname(excel_file)
+                    if platform.system() == "Windows":
+                        os.startfile(excel_dir)
+                    elif platform.system() == "Darwin":  # macOS
+                        os.system(f"open '{excel_dir}'")
+                    else:  # Linux
+                        os.system(f"xdg-open '{excel_dir}'")
 
             except Exception as e:
                 self.log_message(f"❌ HATA: {str(e)}")
                 messagebox.showerror("Hata", str(e))
-                
+
+    # === PART 3 METHODS ===
+
+    def select_part3_excel(self):
+        """Part 3 için Excel seç"""
+        filename = filedialog.askopenfilename(
+            title="Excel Dosyası Seç",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+        if filename:
+            self.part3_excel_var.set(filename)
+
+    def select_part3_image_dir(self):
+        """Part 3 için görsel klasörü seç"""
+        dirname = filedialog.askdirectory(title="Görsel Klasörünü Seç")
+        if dirname:
+            self.part3_image_dir_var.set(dirname)
+
+    def validate_shortening(self):
+        """Part 3: Kısaltma ön doğrulaması"""
+        excel_file = self.part3_excel_var.get()
+        if not excel_file:
+            messagebox.showerror("Hata", "Lütfen Excel dosyası seçin")
+            return
+
+        if not self.part3_image_dir_var.get():
+            messagebox.showerror("Hata", "Lütfen görsel klasörü seçin")
+            return
+
+        self.log_text.delete(1.0, tk.END)
+        self.log_message("Bölüm 3: Kısaltma Kontrolü...")
+        self.log_message(f"Max uzunluk: {self.max_length_var.get()} karakter")
+
+        try:
+            preview = validate_shortening_preview(
+                excel_file,
+                self.part3_image_dir_var.get(),
+                self.max_length_var.get()
+            )
+
+            self.log_message(f"\n📊 Toplam Dosya: {preview['total_files']}")
+            self.log_message(f"✂️  Kısaltılacak: {preview['needs_shortening']}")
+            self.log_message(f"✅ Zaten Uygun: {preview['already_ok']}")
+
+            if preview['examples']:
+                self.log_message("\nÖrnekler:")
+                for ex in preview['examples']:
+                    self.log_message(f"  {ex['original']}")
+                    self.log_message(f"  → {ex['new']} ({ex['saved_chars']} karakter kısaldı)")
+
+            if preview['needs_shortening'] == 0:
+                messagebox.showinfo("Kontrol Tamamlandı", "Tüm dosyalar zaten uygun uzunlukta!")
+            else:
+                messagebox.showinfo(
+                    "Kontrol Tamamlandı",
+                    f"{preview['needs_shortening']} dosya kısaltılacak.\n"
+                    f"'Kısalt' butonuna tıklayarak devam edebilirsiniz."
+                )
+
+        except Exception as e:
+            self.log_message(f"❌ Kontrol hatası: {str(e)}")
+            messagebox.showerror("Hata", f"Kontrol hatası: {str(e)}")
+
+    def shorten_filenames(self):
+        """Part 3: Dosya adlarını kısalt"""
+        excel_file = self.part3_excel_var.get()
+        if not excel_file:
+            messagebox.showerror("Hata", "Lütfen Excel dosyası seçin")
+            return
+
+        if not self.part3_image_dir_var.get():
+            messagebox.showerror("Hata", "Lütfen görsel klasörü seçin")
+            return
+
+        self.log_text.delete(1.0, tk.END)
+        self.log_message("Bölüm 3: Dosya Adı Kısaltma başlıyor...")
+        self.log_message(f"Max uzunluk: {self.max_length_var.get()} karakter")
+
+        try:
+            result = process_shortening(
+                excel_file,
+                self.part3_image_dir_var.get(),
+                self.max_length_var.get()
+            )
+
+            self.log_message(f"\n✅ TAMAMLANDI!")
+            self.log_message(f"📊 Toplam Dosya: {result['total_files']}")
+            self.log_message(f"✂️  Kısaltılan: {result['shortened_count']}")
+            self.log_message(f"⏭️  Atlanan (zaten uygun): {result['skipped_count']}")
+
+            if result['error_count'] > 0:
+                self.log_message(f"❌ Hata: {result['error_count']}")
+
+            if result['backup_dir']:
+                self.log_message(f"\n💾 Yedek: {result['backup_dir']}")
+
+            # Anlaşılır sonuç mesajı
+            msg = result.get('message', f"Kısaltılan: {result['shortened_count']} dosya")
+            msg += "\n\nExcel dosyasının bulunduğu klasörü açmak ister misiniz?"
+
+            if messagebox.askyesno("Tamamlandı", msg):
+                import os
+                import platform
+                excel_dir = os.path.dirname(excel_file)
+                if platform.system() == "Windows":
+                    os.startfile(excel_dir)
+                elif platform.system() == "Darwin":
+                    os.system(f"open '{excel_dir}'")
+                else:
+                    os.system(f"xdg-open '{excel_dir}'")
+
+        except Exception as e:
+            self.log_message(f"❌ HATA: {str(e)}")
+            messagebox.showerror("Hata", str(e))
+
     def _find_latest_excel(self):
         """En son Excel dosyasını bul"""
         try:

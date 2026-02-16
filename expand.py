@@ -4,7 +4,7 @@ Checklist satırlarını kart listelerine genişletme
 """
 
 import logging
-from typing import List, Dict, Tuple, Any, Optional
+from typing import List, Dict, Tuple, Any, Optional, Union
 from dataclasses import dataclass
 import pandas as pd
 
@@ -20,8 +20,8 @@ class CardLine:
     text: str
     player: str
     label: str
-    variant_type: str  # '1/1', '/5', 'Base'
-    denominator: int
+    variant_type: str  # '1/1', '/5', 'Base', 'X'
+    denominator: Union[int, str]  # 5, 25 veya "X", "Short Print"
     number: int
     is_signed: bool
     series: str
@@ -209,16 +209,20 @@ class RowExpander:
     def _expand_variant(self, player: str, label: str, series: str, group: Optional[str],
                     variant_info: VariantInfo, count: int, row_num: int) -> None:
         """Variant kartlarını genişlet"""
-        
-        # Her zaman denominator kadar kart oluştur
-        actual_count = variant_info.denominator
-        
+
+        # Yazılı denominator (X, Short Print) için count kullan
+        # Sayılı denominator (/5, /25) için denominator kullan
+        if isinstance(variant_info.denominator, str):
+            actual_count = count
+        else:
+            actual_count = variant_info.denominator
+
         # Kartları oluştur
         for i in range(1, actual_count + 1):
             line_text = self._build_variant_line(
                 player, label, variant_info.denominator, i, variant_info.is_signed
             )
-            
+
             card_line = CardLine(
                 text=line_text,
                 player=player,
@@ -230,7 +234,7 @@ class RowExpander:
                 series=series,
                 group=group
             )
-            
+
             self.lines.append(card_line)
     
     def _expand_base(self, player: str, label: str, series: str, group: Optional[str],
@@ -278,13 +282,17 @@ class RowExpander:
         
         logger.debug(f"Custom label genişletildi: {custom_label} x{count}")        
     
-    def _build_variant_line(self, player: str, label: str, denominator: int, number: int, is_signed: bool) -> str:
+    def _build_variant_line(self, player: str, label: str, denominator: Union[int, str], number: int, is_signed: bool) -> str:
         """Variant kart satırı oluştur"""
-        line = f"{player} {label} ({number}/{denominator})"
-        
+        # Yazılı denominator (X, Short Print) için farklı format
+        if isinstance(denominator, str):
+            line = f"{player} {label} {denominator}"
+        else:
+            line = f"{player} {label} ({number}/{denominator})"
+
         if is_signed:
             line += " İmzalı"
-        
+
         return line
     
     def _build_base_line(self, player: str, label: str, base_count: int) -> str:
