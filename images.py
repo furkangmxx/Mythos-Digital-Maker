@@ -16,7 +16,7 @@ import shutil
 import logging
 import re
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Set
+from typing import List, Dict, Optional, Tuple, Set, Union
 from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -25,7 +25,35 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # Türkçe karakter dönüşümü
-TURKISH_TO_ASCII = str.maketrans('çÇğĞıIİşŞöÖüÜâÂ', 'cCgGiIIsSoOuUaA')
+# Genişletilmiş karakter dönüşümü (Türkçe + Avrupa dilleri)
+CHAR_TO_ASCII = str.maketrans({
+    # Türkçe
+    'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'İ': 'I',
+    'ş': 's', 'Ş': 'S', 'ö': 'o', 'Ö': 'O', 'ü': 'u', 'Ü': 'U',
+    # Şapkalı (circumflex)
+    'â': 'a', 'Â': 'A', 'ê': 'e', 'Ê': 'E', 'î': 'i', 'Î': 'I',
+    'ô': 'o', 'Ô': 'O', 'û': 'u', 'Û': 'U',
+    # Umlaut (Almanca, İsveççe, Fince) - Jääskeläinen için
+    'ä': 'a', 'Ä': 'A', 'ë': 'e', 'Ë': 'E', 'ï': 'i', 'Ï': 'I',
+    'ÿ': 'y', 'Ÿ': 'Y',
+    # Akut aksanlı
+    'á': 'a', 'Á': 'A', 'é': 'e', 'É': 'E', 'í': 'i', 'Í': 'I',
+    'ó': 'o', 'Ó': 'O', 'ú': 'u', 'Ú': 'U', 'ý': 'y', 'Ý': 'Y',
+    # Grave aksanlı
+    'à': 'a', 'À': 'A', 'è': 'e', 'È': 'E', 'ì': 'i', 'Ì': 'I',
+    'ò': 'o', 'Ò': 'O', 'ù': 'u', 'Ù': 'U',
+    # Tilde
+    'ã': 'a', 'Ã': 'A', 'ñ': 'n', 'Ñ': 'N', 'õ': 'o', 'Õ': 'O',
+    # İskandinav
+    'å': 'a', 'Å': 'A', 'ø': 'o', 'Ø': 'O',
+    # Diğer
+    'ß': 's', 'ł': 'l', 'Ł': 'L', 'ń': 'n', 'Ń': 'N',
+    'ś': 's', 'Ś': 'S', 'ź': 'z', 'Ź': 'Z', 'ż': 'z', 'Ż': 'Z',
+    'ć': 'c', 'Ć': 'C', 'ř': 'r', 'Ř': 'R', 'ě': 'e', 'Ě': 'E',
+    'ů': 'u', 'Ů': 'U', 'ď': 'd', 'Ď': 'D', 'ť': 't', 'Ť': 'T',
+    'ň': 'n', 'Ň': 'N',
+})
+
 SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 
 
@@ -34,31 +62,23 @@ def normalize_for_matching(text: str) -> str:
     Eşleştirme için normalize et
 
     Kurallar:
-    1. Türkçe karakterler → ASCII (ğ→g, ş→s, vb.)
+    1. Özel karakterler → ASCII (ğ→g, ş→s, ä→a, é→e, vb.)
     2. Küçük harf
-    3. Tire (-) → alt çizgi (_)
-    4. Boşluk → alt çizgi (_)
-    5. Diğer özel karakterler (., ', vb.) → SİLİNİR
-    6. Çoklu alt çizgi → tek alt çizgi
-
-    Örnekler:
-    - "T.C. Buruk" → "tc_buruk"
-    - "Okan's Goal" → "okans_goal"
-    - "İçer-dışarı" → "icer_disari"
-    - "Arda Güler" → "arda_guler"
+    3. Tüm boşluklar (NBSP dahil) ve tire → alt çizgi
+    4. Diğer özel karakterler → SİLİNİR
+    5. Çoklu alt çizgi → tek alt çizgi
     """
     if not text:
         return ""
 
-    # 1. Türkçe → ASCII
-    normalized = str(text).translate(TURKISH_TO_ASCII)
+    # 1. Özel karakterler → ASCII
+    normalized = str(text).translate(CHAR_TO_ASCII)
 
     # 2. Küçük harf
     normalized = normalized.lower()
 
-    # 3. Tire ve boşluk → alt çizgi (ÖNCE bu işlemi yap)
-    normalized = normalized.replace('-', '_')
-    normalized = normalized.replace(' ', '_')
+    # 3. TÜM boşluk karakterleri ve tire → alt çizgi (NBSP dahil!)
+    normalized = re.sub(r'[\s\xa0\u00a0\u2007\u202f-]+', '_', normalized)
 
     # 4. Diğer özel karakterleri SİL (a-z, 0-9, alt çizgi dışındaki her şey)
     normalized = re.sub(r'[^a-z0-9_]', '', normalized)
@@ -80,7 +100,7 @@ class CardInfo:
     player: str
     series: str
     group: str
-    denominator: int
+    denominator: Union[int, str]  # 5, 25 veya "X", "Short Print"
     is_signed: bool
     is_base: bool
     
@@ -113,7 +133,7 @@ class FileInfo:
     original_name: str
     has_date: bool
     date_prefix: str
-    denominator: int
+    denominator: Union[int, str]  # 5, 25 veya "X", "Short Print"
     is_signed: bool
     is_base: bool
     
@@ -153,6 +173,7 @@ class ImageMatcher:
         self.parsed_files: Dict[str, FileInfo] = {}
         self.stats = {'found': 0, 'missing': 0, 'conflict': 0}
         self.unique_groups: Dict[tuple, List[int]] = {}  # Performans için
+        self.known_text_denoms: Set[str] = set()  # Excel'den öğrenilen text denominatorlar
         
     def validate_preview(self) -> Dict[str, any]:
         """
@@ -163,11 +184,11 @@ class ImageMatcher:
         logger.info("=== ÖN DOĞRULAMA BAŞLIYOR ===")
 
         try:
-            # 1. Görsel dosyalarını tara
-            self._scan_and_parse_images()
-
-            # 2. Excel'den kartları oku
+            # 1. Excel'den kartları oku (text denominatorları öğren)
             cards = self._read_cards_from_excel()
+
+            # 2. Görsel dosyalarını tara (bilinen denominatorlarla)
+            self._scan_and_parse_images()
 
             # 3. Unique kombinasyonları grupla
             unique_groups: Dict[tuple, List[CardInfo]] = {}
@@ -248,11 +269,11 @@ class ImageMatcher:
         logger.info(f"Strict Mode: {'Açık (fazla kelime reddedilir)' if self.strict_mode else 'Kapalı'}")
 
         try:
-            # 1. Görsel dosyalarını tara ve parse et
-            self._scan_and_parse_images()
-
-            # 2. Excel'den kart bilgilerini oku
+            # 1. Excel'den kart bilgilerini oku (text denominatorları öğren)
             cards = self._read_cards_from_excel()
+
+            # 2. Görsel dosyalarını tara ve parse et (bilinen denominatorlarla)
+            self._scan_and_parse_images()
 
             # 3. Her kart için eşleştirme yap (unique grouping ile)
             self._match_all_cards(cards)
@@ -323,25 +344,38 @@ class ImageMatcher:
         
         # İmzalı kontrolü (_s_ var mı)
         is_signed = '_s_' in f'_{name}_'  # Kenar durumları için
-        
+
         # Base kontrolü
         is_base = False
-        denominator = 0
-        
-        # Base pattern: _base veya _base_N
-        base_match = re.search(r'_base(?:_(\d+))?$', name)
-        if base_match:
+        denominator: Union[int, str] = 0
+        found_text_denom = None
+
+        # Base pattern: _base veya _base_N (sonda veya ortada)
+        if '_base_' in name or name.endswith('_base'):
             is_base = True
-            if base_match.group(1):
-                denominator = int(base_match.group(1))
+            # Sondaki sayıyı yoksay (base için numara)
             name = re.sub(r'_base(?:_\d+)?$', '', name)
+            name = re.sub(r'_base_', '_', name)
         else:
-            # Normal denominator: _10 veya _25 (sondaki sayı)
-            denom_match = re.search(r'_(\d+)$', name)
-            if denom_match:
-                denominator = int(denom_match.group(1))
-                name = re.sub(r'_\d+$', '', name)
-        
+            # 1. Önce bilinen text denominatorları ara (Excel'den öğrenilen)
+            for known_denom in self.known_text_denoms:
+                # Pattern: _x_s_1 veya _x_1 veya _x (sonda veya ortada _s_ ile)
+                pattern = rf'_{re.escape(known_denom)}(?:_s)?(?:_\d+)?$'
+                if re.search(pattern, name, re.IGNORECASE):
+                    found_text_denom = known_denom.upper()
+                    # Tüm suffix'i çıkar
+                    name = re.sub(pattern, '', name, flags=re.IGNORECASE)
+                    break
+
+            if found_text_denom:
+                denominator = found_text_denom
+            else:
+                # 2. Bilinen text denom yoksa, sondaki sayı = denominator
+                denom_match = re.search(r'_(\d+)$', name)
+                if denom_match:
+                    denominator = int(denom_match.group(1))
+                    name = re.sub(r'_\d+$', '', name)
+
         # _s_ çıkar (içerik parçalarından)
         name = re.sub(r'_s_', '_', name)
         name = re.sub(r'^s_', '', name)
@@ -393,12 +427,21 @@ class ImageMatcher:
                 series = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""    # D: series_name
                 group = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else ""     # E: group
                 
-                # F: Denominator
+                # F: Denominator (sayı veya yazı olabilir: 5, 25, "X", "Short Print")
                 denom_val = row.iloc[5] if pd.notna(row.iloc[5]) else 0
-                try:
-                    denominator = int(float(denom_val))
-                except:
-                    denominator = 0
+                if isinstance(denom_val, str):
+                    denom_str = denom_val.strip().upper()
+                    if denom_str.isdigit():
+                        denominator: Union[int, str] = int(denom_str)
+                    elif denom_str:
+                        denominator = denom_str  # "X", "SHORT PRINT" vs.
+                    else:
+                        denominator = 0
+                else:
+                    try:
+                        denominator = int(float(denom_val))
+                    except (ValueError, TypeError):
+                        denominator = 0
                 
                 # G: is_signed
                 signed_val = str(row.iloc[6]).strip().lower() if pd.notna(row.iloc[6]) else ""
@@ -423,8 +466,17 @@ class ImageMatcher:
                 cards.append(card)
             
             logger.info(f"Excel'den okunan kart: {len(cards)}")
+
+            # Text denominatorları topla (X, SHORT PRINT, BASE vs.)
+            for card in cards:
+                if isinstance(card.denominator, str) and card.denominator:
+                    self.known_text_denoms.add(normalize_for_matching(card.denominator))
+
+            if self.known_text_denoms:
+                logger.info(f"Bilinen text denominatorlar: {self.known_text_denoms}")
+
             return cards
-            
+
         except Exception as e:
             raise ValueError(f"Excel okuma hatası: {str(e)}")
     
@@ -519,8 +571,12 @@ class ImageMatcher:
                 continue
             
             # 3. Denominator kontrolü (base değilse)
-            if not card.is_base and card.denominator > 0:
-                if file_info.denominator != card.denominator:
+            # Yazılı denominator ("X") veya sayılı (5, 25) olabilir
+            if not card.is_base and card.denominator:
+                # Karşılaştırma: her ikisini de normalize et (boşluk vs underscore farkı için)
+                card_denom = normalize_for_matching(str(card.denominator)) if card.denominator else ""
+                file_denom = normalize_for_matching(str(file_info.denominator)) if file_info.denominator else ""
+                if card_denom != file_denom:
                     continue
             
             # İÇERİK EŞLEŞMESİ
@@ -707,7 +763,10 @@ class ImageMatcher:
             # B kolonu (index 1) zaten var olmalı
             if len(data.columns) < 2:
                 raise ValueError("Excel'de B kolonu yok!")
-            
+
+            # B kolonu boş gelince float64 oluyor, string yazabilmek için object'e çevir
+            data.iloc[:, 1] = data.iloc[:, 1].astype(object)
+
             # Match sonuçlarını B kolonuna yaz
             for match in self.matches:
                 row_idx = match.row_number - 2  # Excel satır → DataFrame index
