@@ -1,0 +1,10 @@
+{
+    "python.defaultInterpreterPath": "./venv/bin/python",
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": ["tests"],
+    "python.formatting.provider": "black",
+    "python.linting.enabled": true,
+    "python.linting.flake8Enabled": true,
+    "files.autoSave": "afterDelay",
+    "editor.formatOnSave": true
+}
