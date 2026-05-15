@@ -180,6 +180,13 @@ class ImageMatcher:
         self.stats = {'found': 0, 'missing': 0, 'conflict': 0}
         self.unique_groups: Dict[tuple, List[int]] = {}  # Performans için
         self.known_text_denoms: Set[str] = set()  # Excel'den öğrenilen text denominatorlar
+
+        # B1: _read_cards_from_excel sonucunu cache'le (validate_preview +
+        # process_all aynı dosyayı iki kez parse etmesin)
+        self._cards_cache: Optional[List[CardInfo]] = None
+        # B3: (is_base, is_signed, denominator) bucket index — her kart için
+        # tüm dosyaları taramak yerine uyumlu olanlara doğrudan bak
+        self.file_index: Dict[Tuple, List[Tuple[str, FileInfo]]] = {}
         
     def validate_preview(self) -> Dict[str, any]:
         """
@@ -302,8 +309,22 @@ class ImageMatcher:
             logger.error(f"Part 2 hatası: {str(e)}")
             raise
     
+    @staticmethod
+    def _bucket_key(is_base: bool, is_signed: bool,
+                    denominator: Union[int, str]) -> Tuple:
+        """
+        Hard-rule eşleşmesi için bucket anahtarı.
+        Aynı (is_base, is_signed, denominator) olan kart ve dosyalar
+        aynı bucket'a düşer; matcher sadece o bucket'ı tarar.
+        """
+        if is_base:
+            # Base kartlarda denominator karşılaştırılmıyor, ortak bucket
+            return (True, is_signed, '_BASE_')
+        denom_norm = normalize_for_matching(str(denominator)) if denominator else ''
+        return (False, is_signed, denom_norm)
+
     def _scan_and_parse_images(self) -> None:
-        """Görsel dosyalarını tara ve parse et"""
+        """Görsel dosyalarını tara, parse et ve bucket index'le"""
         if not self.image_dir.exists():
             raise FileNotFoundError(f"Görsel klasörü bulunamadı: {self.image_dir}")
 
@@ -318,6 +339,10 @@ class ImageMatcher:
             self.image_files.append(file_path)
             parsed = self._parse_filename(file_path.name)
             self.parsed_files[file_path.name] = parsed
+
+            # B3: bucket index'e ekle
+            key = self._bucket_key(parsed.is_base, parsed.is_signed, parsed.denominator)
+            self.file_index.setdefault(key, []).append((file_path.name, parsed))
 
         if not self.image_files:
             raise ValueError(f"Görsel klasöründe desteklenen dosya yok: {SUPPORTED_EXTENSIONS}")
@@ -405,8 +430,11 @@ class ImageMatcher:
     
     def _read_cards_from_excel(self) -> List[CardInfo]:
         """
-        Excel'den kart bilgilerini oku
-        
+        Excel'den kart bilgilerini oku.
+
+        Cache'li: aynı instance'da ikinci çağrı pd.read_excel'i tekrar
+        tetiklemez (validate_preview → process_all senaryosu için önemli).
+
         Beklenen kolonlar:
         A (0): Kart Listesi
         B (1): Görsel Dosyası (Part 2 dolduracak)
@@ -416,6 +444,9 @@ class ImageMatcher:
         F (5): denominator
         G (6): is_signed
         """
+        if self._cards_cache is not None:
+            return self._cards_cache
+
         try:
             data = pd.read_excel(self.excel_file, sheet_name="Çıktı")
             
@@ -482,6 +513,7 @@ class ImageMatcher:
             if self.known_text_denoms:
                 logger.info(f"Bilinen text denominatorlar: {self.known_text_denoms}")
 
+            self._cards_cache = cards
             return cards
 
         except Exception as e:
@@ -565,15 +597,16 @@ class ImageMatcher:
         """
         card_parts = card.get_all_parts()
         candidates = []
-        
-        for filename, file_info in self.parsed_files.items():
-            # HARD RULES
-            
-            # 1. İmzalı kontrolü
+
+        # B3: tüm dosyalar yerine sadece uyumlu bucket'taki dosyaları gez
+        bucket_key = self._bucket_key(card.is_base, card.is_signed, card.denominator)
+        candidate_files = self.file_index.get(bucket_key, [])
+
+        for filename, file_info in candidate_files:
+            # HARD RULES — bucket sayesinde signed/base/denom zaten eşleşmiş,
+            # ama defense-in-depth için yine kontrol et
             if card.is_signed != file_info.is_signed:
                 continue
-            
-            # 2. Base kontrolü
             if card.is_base != file_info.is_base:
                 continue
             
