@@ -15,6 +15,7 @@ import os
 import shutil
 import logging
 import re
+import functools
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Set, Union
 from dataclasses import dataclass, field
@@ -57,6 +58,7 @@ CHAR_TO_ASCII = str.maketrans({
 SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 
 
+@functools.lru_cache(maxsize=10_000)
 def normalize_for_matching(text: str) -> str:
     """
     Eşleştirme için normalize et
@@ -67,6 +69,8 @@ def normalize_for_matching(text: str) -> str:
     3. Tüm boşluklar (NBSP dahil) ve tire → alt çizgi
     4. Diğer özel karakterler → SİLİNİR
     5. Çoklu alt çizgi → tek alt çizgi
+
+    Cache'li: aynı string'i bir kez normalize edip sonuçları tutar.
     """
     if not text:
         return ""
@@ -139,9 +143,11 @@ class FileInfo:
     
     # Tüm parçalar (normalize edilmiş)
     all_parts: List[str] = field(default_factory=list)
-    
+
     # İçerik parçaları (tarih, s, base, denominator hariç)
     content_parts: List[str] = field(default_factory=list)
+    # Aynı içerik, hızlı O(1) exact-match için
+    content_parts_set: frozenset = field(default_factory=frozenset)
 
 
 @dataclass
@@ -161,7 +167,7 @@ class ImageMatcher:
 
     def __init__(self, excel_file: Path, image_dir: Path,
                  date_str: str = None, add_date_prefix: bool = False,
-                 strict_mode: bool = True):
+                 strict_mode: bool = False):
         self.excel_file = Path(excel_file)
         self.image_dir = Path(image_dir)
         self.date_str = date_str or datetime.now().strftime("%Y%m%d")
@@ -300,21 +306,19 @@ class ImageMatcher:
         """Görsel dosyalarını tara ve parse et"""
         if not self.image_dir.exists():
             raise FileNotFoundError(f"Görsel klasörü bulunamadı: {self.image_dir}")
-        
-        seen_files = set()
-        
-        for ext in SUPPORTED_EXTENSIONS:
-            for pattern in [f"*{ext}", f"*{ext.upper()}"]:
-                for file_path in self.image_dir.glob(pattern):
-                    abs_path = str(file_path.resolve())
-                    if abs_path not in seen_files:
-                        seen_files.add(abs_path)
-                        self.image_files.append(file_path)
-                        
-                        # Parse et
-                        parsed = self._parse_filename(file_path.name)
-                        self.parsed_files[file_path.name] = parsed
-        
+
+        # Tek geçişle tara, suffix'i case-insensitive kontrol et
+        # (eski kod 6 ayrı glob taraması yapıyordu: .jpg/.JPG × 3 uzantı)
+        for file_path in self.image_dir.iterdir():
+            if not file_path.is_file():
+                continue
+            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                continue
+
+            self.image_files.append(file_path)
+            parsed = self._parse_filename(file_path.name)
+            self.parsed_files[file_path.name] = parsed
+
         if not self.image_files:
             raise ValueError(f"Görsel klasöründe desteklenen dosya yok: {SUPPORTED_EXTENSIONS}")
         
@@ -393,7 +397,8 @@ class ImageMatcher:
             is_signed=is_signed,
             is_base=is_base,
             all_parts=all_parts,
-            content_parts=content_parts
+            content_parts=content_parts,
+            content_parts_set=frozenset(content_parts)
         )
     
     def _read_cards_from_excel(self) -> List[CardInfo]:
@@ -581,12 +586,13 @@ class ImageMatcher:
             
             # İÇERİK EŞLEŞMESİ
             file_parts = file_info.content_parts
-            
+            file_parts_set = file_info.content_parts_set
+
             # Excel'deki parçaların kaçı dosyada var?
             matched_parts = 0
             for card_part in card_parts:
-                # Exact match önce kontrol
-                if card_part in file_parts:
+                # Exact match önce kontrol (O(1) set lookup)
+                if card_part in file_parts_set:
                     matched_parts += 1
                 else:
                     # Fuzzy: 2 karakter tolerans (typo için)
@@ -826,7 +832,7 @@ class ImageMatcher:
 
 # Public API
 def validate_matching_preview(excel_file: str, image_dir: str,
-                              date: str = None, strict_mode: bool = True) -> Dict[str, any]:
+                              date: str = None, strict_mode: bool = False) -> Dict[str, any]:
     """
     ÖN DOĞRULAMA - Eşleştirme yapmadan önce preview/istatistik
 
@@ -852,7 +858,7 @@ def validate_matching_preview(excel_file: str, image_dir: str,
 
 def process_image_mapping(excel_file: str, image_dir: str,
                          date: str = None, add_date_prefix: bool = False,
-                         strict_mode: bool = True) -> Dict[str, any]:
+                         strict_mode: bool = False) -> Dict[str, any]:
     """Part 2 ana fonksiyon"""
     matcher = ImageMatcher(
         Path(excel_file),

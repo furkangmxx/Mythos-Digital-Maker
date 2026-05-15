@@ -283,11 +283,11 @@ if __name__ == "__main__":
     test_card_line_sorting()
     
     # PyICU durumu
-try:
-    import icu # type: ignore CALISMIYOR
-    version = getattr(icu, 'ICU_VERSION', 'Available')
-    print(f"\n✅ PyICU mevcut: {version}")
-except ImportError:
-    print("\n❌ PyICU bulunamadı (fallback sıralama kullanılacak)")
-except Exception as e:
-    print(f"\n⚠️ PyICU hatası: {str(e)}")
+    try:
+        import icu # type: ignore CALISMIYOR
+        version = getattr(icu, 'ICU_VERSION', 'Available')
+        print(f"\n✅ PyICU mevcut: {version}")
+    except ImportError:
+        print("\n❌ PyICU bulunamadı (fallback sıralama kullanılacak)")
+    except Exception as e:
+        print(f"\n⚠️ PyICU hatası: {str(e)}")
