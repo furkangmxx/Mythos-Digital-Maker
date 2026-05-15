@@ -350,12 +350,11 @@ class ImageMatcher:
         denominator: Union[int, str] = 0
         found_text_denom = None
 
-        # Base pattern: _base veya _base_N (sonda veya ortada)
-        if '_base_' in name or name.endswith('_base'):
+        # Base pattern: SADECE sonda _base veya _base_N
+        # (ortada geçen "base" seri/grup adının parçası olabilir, örn. "Classic Base")
+        if re.search(r'_base(?:_\d+)?$', name):
             is_base = True
-            # Sondaki sayıyı yoksay (base için numara)
             name = re.sub(r'_base(?:_\d+)?$', '', name)
-            name = re.sub(r'_base_', '_', name)
         else:
             # 1. Önce bilinen text denominatorları ara (Excel'den öğrenilen)
             for known_denom in self.known_text_denoms:
@@ -447,8 +446,9 @@ class ImageMatcher:
                 signed_val = str(row.iloc[6]).strip().lower() if pd.notna(row.iloc[6]) else ""
                 is_signed = signed_val in ['evet', 'true', '1', 'yes']
                 
-                # Base kontrolü
-                is_base = 'base' in raw_text.lower()
+                # Base kontrolü: raw_text sadece " Base" ile bitiyorsa base kart
+                # (seri adında "base" geçenler için yanlış pozitif vermesin, örn. "Classic Base")
+                is_base = raw_text.lower().rstrip().endswith(' base')
                 
                 if not raw_text:
                     continue
