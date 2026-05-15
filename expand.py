@@ -8,7 +8,7 @@ from typing import List, Dict, Tuple, Any, Optional, Union
 from dataclasses import dataclass
 import pandas as pd
 
-from utils import safe_int, normalize_text
+from utils import safe_int, parse_int_or_none, normalize_text
 from headers import HeaderProcessor, VariantInfo
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,11 @@ class RowExpander:
     def expand_all_rows(self) -> ExpansionResult:
         """Tüm satırları genişlet"""
         logger.info(f"Satır genişletme başlıyor: {len(self.data)} satır")
-        
+
+        # Merge'den ÖNCE raw data'da geçersiz numerik hücreleri tespit et
+        # (merge sırasında safe_int 'abc' gibi değerleri sessizce 0'a çeviriyor)
+        self._validate_numeric_cells()
+
         # Önce çoklu satırları birleştir
         merged_data = self._merge_duplicate_rows()
         
@@ -160,51 +164,103 @@ class RowExpander:
         
         # Variant sütunlarını işle
         variant_pairs = self.header_processor.get_variant_pairs()
-        
+
         for denominator, pair in variant_pairs.items():
             for variant_type, variant_info in pair.items():
                 if variant_info is None:
                     continue
-                
+
                 col_idx = self.header_processor.get_column_index(variant_info.column_name)
                 if col_idx is None:
                     continue
-                
+
                 cell_value = row_data.iloc[col_idx]
-                
-                if pd.notna(cell_value) and str(cell_value).strip():
-                    count = safe_int(cell_value)
-                    if count > 0:
-                        self._expand_variant(
-                            player, label, series, group,
-                            variant_info, count, row_idx + 2
-                        )
-        
+                count = self._read_count_cell(
+                    cell_value, row_idx + 2, variant_info.column_name
+                )
+                if count is not None and count > 0:
+                    self._expand_variant(
+                        player, label, series, group,
+                        variant_info, count, row_idx + 2
+                    )
+
         # Base sütununu işle
         if self.base_idx is not None:
             base_value = row_data.iloc[self.base_idx]
-            
-            if pd.notna(base_value) and str(base_value).strip():
-                base_count = safe_int(base_value)
-                if base_count > 0:
-                    self._expand_base(
-                        player, label, series, group,
-                        base_count, row_idx + 2
-                    )
+            base_count = self._read_count_cell(base_value, row_idx + 2, "Base")
+            if base_count is not None and base_count > 0:
+                self._expand_base(
+                    player, label, series, group,
+                    base_count, row_idx + 2
+                )
         # Custom label sütunlarını işle
         if hasattr(self.header_processor, 'custom_labels'):
             for custom_label_name in self.header_processor.custom_labels.keys():
                 col_idx = self.header_processor.get_column_index(custom_label_name)
                 if col_idx is not None:
                     cell_value = row_data.iloc[col_idx]
-                    
-                    if pd.notna(cell_value) and str(cell_value).strip():
-                        count = safe_int(cell_value)
-                        if count > 0:
-                            self._expand_custom_label(
-                                player, label, series, group,
-                                custom_label_name, count, row_idx + 2
-                            )
+                    count = self._read_count_cell(
+                        cell_value, row_idx + 2, custom_label_name
+                    )
+                    if count is not None and count > 0:
+                        self._expand_custom_label(
+                            player, label, series, group,
+                            custom_label_name, count, row_idx + 2
+                        )
+
+    def _read_count_cell(self, cell_value, row_num: int,
+                         column_name: str) -> Optional[int]:
+        """
+        Sayısal hücreyi oku.
+        Dönüş:
+        - None: hücre boş veya geçersiz (geçersiz olanlar
+          _validate_numeric_cells'de zaten uyarılmıştır)
+        - int: parse edilebilen değer
+        """
+        if not pd.notna(cell_value) or not str(cell_value).strip():
+            return None
+        return parse_int_or_none(cell_value)
+
+    def _numeric_column_indices(self) -> List[Tuple[int, str]]:
+        """Sayısal değer beklenen sütunların (kolon index, isim) listesi"""
+        result: List[Tuple[int, str]] = []
+        for pair in self.header_processor.get_variant_pairs().values():
+            for variant_info in [pair.get('normal'), pair.get('signed')]:
+                if variant_info is None:
+                    continue
+                idx = self.header_processor.get_column_index(variant_info.column_name)
+                if idx is not None:
+                    result.append((idx, variant_info.column_name))
+        if self.base_idx is not None:
+            result.append((self.base_idx, "Base"))
+        if hasattr(self.header_processor, 'custom_labels'):
+            for name in self.header_processor.custom_labels:
+                idx = self.header_processor.get_column_index(name)
+                if idx is not None:
+                    result.append((idx, name))
+        return result
+
+    def _validate_numeric_cells(self) -> None:
+        """
+        Raw data'da geçersiz numerik hücreler için uyarı ekle.
+        Merge sırasında safe_int 'abc' gibi değerleri sessizce 0'a
+        çeviriyordu; bu method merge'den önce çalışıp kullanıcıyı uyarır.
+        """
+        for col_idx, col_name in self._numeric_column_indices():
+            for row_idx in range(len(self.data)):
+                cell = self.data.iloc[row_idx, col_idx]
+                if not pd.notna(cell) or not str(cell).strip():
+                    continue
+                if parse_int_or_none(cell) is None:
+                    self.warnings.append({
+                        'row': row_idx + 2,
+                        'column': col_name,
+                        'type': 'Invalid Number',
+                        'message': (
+                            f"'{cell}' geçersiz sayı değeri; "
+                            f"bu hücre için kart oluşturulmadı"
+                        )
+                    })
 
     def _expand_variant(self, player: str, label: str, series: str, group: Optional[str],
                     variant_info: VariantInfo, count: int, row_num: int) -> None:

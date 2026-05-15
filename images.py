@@ -346,43 +346,45 @@ class ImageMatcher:
             date_prefix = date_match.group(1)
             name = date_match.group(2)
         
-        # İmzalı kontrolü (_s_ var mı)
-        is_signed = '_s_' in f'_{name}_'  # Kenar durumları için
-
-        # Base kontrolü
+        # Base / denominator / imzalı tespitini sondan tara
+        # (eski "_s_" substring kontrolü orta-s yanlış pozitif veriyordu —
+        # örn. "Jane S Doe" oyuncusunda yanlışlıkla imzalı sayılıyordu)
         is_base = False
+        is_signed = False
         denominator: Union[int, str] = 0
         found_text_denom = None
 
-        # Base pattern: SADECE sonda _base veya _base_N
+        # 1. Base pattern: SADECE sonda _base veya _base_N
         # (ortada geçen "base" seri/grup adının parçası olabilir, örn. "Classic Base")
         if re.search(r'_base(?:_\d+)?$', name):
             is_base = True
             name = re.sub(r'_base(?:_\d+)?$', '', name)
         else:
-            # 1. Önce bilinen text denominatorları ara (Excel'den öğrenilen)
+            # 2. Bilinen text denominatorları ara
+            # Pattern: _<denom>(_s)?(_<seq>)? — örn. _x, _x_1, _x_s, _x_s_1
             for known_denom in self.known_text_denoms:
-                # Pattern: _x_s_1 veya _x_1 veya _x (sonda veya ortada _s_ ile)
-                pattern = rf'_{re.escape(known_denom)}(?:_s)?(?:_\d+)?$'
-                if re.search(pattern, name, re.IGNORECASE):
+                pattern = rf'_{re.escape(known_denom)}(?P<signed>_s)?(?:_\d+)?$'
+                m = re.search(pattern, name, re.IGNORECASE)
+                if m:
                     found_text_denom = known_denom.upper()
-                    # Tüm suffix'i çıkar
+                    if m.group('signed'):
+                        is_signed = True
                     name = re.sub(pattern, '', name, flags=re.IGNORECASE)
                     break
 
             if found_text_denom:
                 denominator = found_text_denom
             else:
-                # 2. Bilinen text denom yoksa, sondaki sayı = denominator
+                # 3. Numerik denominator (sonda _<sayı>)
                 denom_match = re.search(r'_(\d+)$', name)
                 if denom_match:
                     denominator = int(denom_match.group(1))
                     name = re.sub(r'_\d+$', '', name)
 
-        # _s_ çıkar (içerik parçalarından)
-        name = re.sub(r'_s_', '_', name)
-        name = re.sub(r'^s_', '', name)
-        name = re.sub(r'_s$', '', name)
+        # 4. İmza markeri: name sonu _s ise (denom/base çıkarıldıktan sonra)
+        if name.endswith('_s'):
+            is_signed = True
+            name = name[:-2]
         
         # İçerik parçaları
         all_parts = name.split('_')
@@ -762,36 +764,42 @@ class ImageMatcher:
         logger.info(f"{renamed_count} dosya yeniden adlandırıldı")
     
     def _update_image_column(self) -> None:
-        """B kolonunu (Görsel Dosyası) güncelle"""
+        """
+        B kolonunu (Görsel Dosyası) güncelle.
+
+        Cell-level edit: openpyxl ile sheet'i aç, sadece B sütunundaki
+        hücreleri güncelle, kaydet. Kullanıcının manuel formatlaması
+        (renk, şartlı biçim, validation, kolon genişliği) korunur.
+
+        (Eski sürüm pd.ExcelWriter + if_sheet_exists='replace' kullanarak
+        sheet'i komple yeniden yazıyordu → formatlar siliniyordu.)
+        """
+        from openpyxl import load_workbook
+
         try:
-            data = pd.read_excel(self.excel_file, sheet_name="Çıktı")
-            
-            # B kolonu (index 1) zaten var olmalı
-            if len(data.columns) < 2:
-                raise ValueError("Excel'de B kolonu yok!")
+            wb = load_workbook(self.excel_file)
+            if "Çıktı" not in wb.sheetnames:
+                raise ValueError("Excel'de 'Çıktı' sheet'i yok")
 
-            # B kolonu boş gelince float64 oluyor, string yazabilmek için object'e çevir
-            data.iloc[:, 1] = data.iloc[:, 1].astype(object)
-
-            # Match sonuçlarını B kolonuna yaz
+            ws = wb["Çıktı"]
+            # Match sonuçlarını B kolonuna (2. sütun) yaz.
+            # match.row_number Excel satır numarası (1-indexed, header 1, data 2+)
             for match in self.matches:
-                row_idx = match.row_number - 2  # Excel satır → DataFrame index
-                
-                if 0 <= row_idx < len(data):
-                    if match.status == 'found':
-                        data.iloc[row_idx, 1] = match.matched_file  # B kolonu = index 1
-                    elif match.status == 'conflict':
-                        data.iloc[row_idx, 1] = f"CONFLICT: {', '.join(match.conflict_files[:3])}"
-                    else:
-                        data.iloc[row_idx, 1] = ""
-            
-            # Excel'e yaz
-            with pd.ExcelWriter(self.excel_file, engine='openpyxl', mode='a',
-                               if_sheet_exists='replace') as writer:
-                data.to_excel(writer, sheet_name="Çıktı", index=False)
-            
-            logger.info("Görsel Dosyası kolonu (B) güncellendi")
-            
+                row = match.row_number
+                if row < 2:  # Header satırı veya negatif satır — atla
+                    continue
+                if match.status == 'found':
+                    ws.cell(row=row, column=2).value = match.matched_file
+                elif match.status == 'conflict':
+                    ws.cell(row=row, column=2).value = (
+                        f"CONFLICT: {', '.join(match.conflict_files[:3])}"
+                    )
+                else:  # missing
+                    ws.cell(row=row, column=2).value = ""
+
+            wb.save(self.excel_file)
+            logger.info("Görsel Dosyası kolonu (B) güncellendi (format korundu)")
+
         except Exception as e:
             raise ValueError(f"Excel güncelleme hatası: {str(e)}")
     

@@ -141,6 +141,28 @@ def safe_int(value, default: int = 0) -> int:
     return default
 
 
+def parse_int_or_none(value) -> Optional[int]:
+    """
+    Hücreyi int'e parse et:
+    - None / NaN / boş string → None (boş hücre, hata değil)
+    - Geçerli sayı → int değer
+    - Geçersiz string → None (caller warning ekleyebilir)
+
+    safe_int'in aksine geçersiz veri ile boş hücreyi ayırt eder.
+    """
+    if value is None:
+        return None
+    if isinstance(value, float) and value != value:  # NaN
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        return int(float(s))
+    except (ValueError, TypeError):
+        return None
+
+
 def get_current_user() -> str:
     """Mevcut kullanıcı adını al"""
     return os.environ.get('USERNAME', os.environ.get('USER', 'Unknown'))
