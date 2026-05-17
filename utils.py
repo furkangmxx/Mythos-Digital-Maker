@@ -13,21 +13,35 @@ import pytz
 from platformdirs import user_documents_dir
 
 
-def setup_logging() -> None:
-    """Logging sistemini kurma"""
+def setup_logging(gui_handler: Optional["logging.Handler"] = None) -> None:
+    """
+    Logging sistemini kurma.
+
+    gui_handler: opsiyonel ek handler (örn. TkinterTextHandler). GUI
+    uygulaması başlangıçta kendi handler'ını verebilir; backend
+    logger.info/warning/error mesajları otomatik GUI'ye düşer.
+
+    Format: dosya handler için tam (asctime + level + logger + msg),
+    GUI handler için kısa (TkinterTextHandler kendi format'ını yönetir).
+    """
     log_dir = get_app_data_dir() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    
+
     today = datetime.now().strftime("%Y%m%d")
     log_file = log_dir / f"run-{today}.log"
-    
+
+    handlers: list = [
+        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.StreamHandler(),
+    ]
+    if gui_handler is not None:
+        handlers.append(gui_handler)
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
+        handlers=handlers,
+        force=True,  # Tekrar çağrılırsa eski handler'ları temizle (idempotent)
     )
 
 

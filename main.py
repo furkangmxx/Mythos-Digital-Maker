@@ -11,6 +11,8 @@ CLI ve GUI interface'leri
 import sys
 import logging
 import os
+import queue
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -329,6 +331,106 @@ def images_command(excel, imgdir, date, skip_preview):
         sys.exit(1)
 
 # GUI Implementation
+
+# Renk paleti — açık tema, log seviyelerine göre
+LOG_COLORS = {
+    'DEBUG': '#757575',     # açık gri
+    'INFO': '#1F1F1F',      # koyu gri (varsayılan)
+    'WARNING': '#B8860B',   # koyu turuncu
+    'ERROR': '#C62828',     # kırmızı
+    'CRITICAL': '#B71C1C',  # koyu kırmızı
+    'SUCCESS': '#2E7D32',   # yeşil (özel custom level değil, mesaj içeriğine göre)
+}
+
+
+class TkinterTextHandler(logging.Handler):
+    """
+    Backend logger mesajlarını Tkinter Text widget'a yazan handler.
+
+    Thread-safe: gelen log kayıtları queue'ya konur, ana thread periyodik
+    olarak queue'yu drain edip Text widget'a yazar. Backend uzun süren
+    işlemler farklı thread'den log atsa bile widget güvenle güncellenir.
+
+    Seviyelere göre Text tag uygular (renkli gösterim için widget tarafında
+    tag_configure çağrılmış olmalı).
+    """
+
+    def __init__(self, text_widget: tk.Text, drain_interval_ms: int = 100):
+        super().__init__()
+        self.text_widget = text_widget
+        self.drain_interval_ms = drain_interval_ms
+        self._queue: "queue.Queue[logging.LogRecord]" = queue.Queue()
+        self._closed = False
+        self.setFormatter(logging.Formatter('%(asctime)s %(levelname)-5s %(message)s',
+                                            datefmt='%H:%M:%S'))
+        # Drain'i başlat
+        self._schedule_drain()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if self._closed:
+            return
+        try:
+            self._queue.put_nowait(record)
+        except Exception:
+            self.handleError(record)
+
+    def _schedule_drain(self) -> None:
+        if self._closed:
+            return
+        try:
+            self.text_widget.after(self.drain_interval_ms, self._drain)
+        except tk.TclError:
+            # Widget destroyed — sessizce kapan
+            self._closed = True
+
+    def _drain(self) -> None:
+        if self._closed:
+            return
+        try:
+            while True:
+                record = self._queue.get_nowait()
+                msg = self.format(record)
+                tag = self._tag_for_record(record)
+                try:
+                    self.text_widget.insert(tk.END, msg + "\n", (tag,))
+                    self.text_widget.see(tk.END)
+                except tk.TclError:
+                    self._closed = True
+                    return
+        except queue.Empty:
+            pass
+        finally:
+            self._schedule_drain()
+
+    @staticmethod
+    def _tag_for_record(record: logging.LogRecord) -> str:
+        """Log seviyesine göre Text widget tag adı"""
+        if record.levelno >= logging.ERROR:
+            return 'error'
+        if record.levelno >= logging.WARNING:
+            return 'warning'
+        # INFO içinde "✅" veya "TAMAMLANDI" geçen mesajları success say
+        msg = str(record.msg)
+        if '✅' in msg or 'TAMAMLANDI' in msg or 'BAŞARILI' in msg:
+            return 'success'
+        if record.levelno >= logging.INFO:
+            return 'info'
+        return 'debug'
+
+    def close(self) -> None:
+        self._closed = True
+        super().close()
+
+
+def configure_text_tags(text_widget: tk.Text) -> None:
+    """Log Text widget'ı için renk tag'lerini ayarla"""
+    text_widget.tag_configure('info', foreground=LOG_COLORS['INFO'])
+    text_widget.tag_configure('warning', foreground=LOG_COLORS['WARNING'])
+    text_widget.tag_configure('error', foreground=LOG_COLORS['ERROR'])
+    text_widget.tag_configure('success', foreground=LOG_COLORS['SUCCESS'])
+    text_widget.tag_configure('debug', foreground=LOG_COLORS['DEBUG'])
+
+
 class MythosGUI:
     """GUI uygulaması"""
     
@@ -359,9 +461,19 @@ class MythosGUI:
         self.max_length_var = tk.IntVar(value=97)
 
         self.setup_ui()
-        # Mevcut variables'lardan sonra ekleyin:
 
-        
+        # Logger köprüsü — backend logger.info/warning/error mesajları
+        # otomatik olarak GUI log alanına düşer (renkli, sıralı, thread-safe)
+        self.gui_log_handler = TkinterTextHandler(self.log_text)
+        setup_logging(gui_handler=self.gui_log_handler)
+        self.logger = logging.getLogger("mythos.gui")
+
+        # Sonuç paneli son güncelleme zamanı (boş başlangıçta)
+        self._last_summary: Optional[str] = None
+        # İşlem süresi ölçümü için
+        self._op_start_time: Optional[float] = None
+
+
     def setup_ui(self):
         """UI kurulumu"""
         
@@ -491,24 +603,55 @@ class MythosGUI:
         self.status_var = tk.StringVar(value="Hazır")
         ttk.Label(status_frame, textvariable=self.status_var, width=25, anchor=tk.W).pack(side=tk.LEFT)
         
-        # === Log - daha kullanışlı boyut ===
+        # === Log alanı — büyük, renkli, monospace ===
         log_frame = ttk.LabelFrame(main_frame, text="Log", padding="5")
         log_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        self.log_text = tk.Text(log_frame, height=6, width=70, wrap=tk.WORD)
+
+        # Toolbar — filtre + temizle + kaydet
+        log_toolbar = ttk.Frame(log_frame)
+        log_toolbar.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 4))
+        ttk.Button(log_toolbar, text="Tümü", width=8,
+                   command=lambda: self._set_log_filter('all')).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(log_toolbar, text="Uyarılar", width=10,
+                   command=lambda: self._set_log_filter('warnings')).pack(side=tk.LEFT, padx=4)
+        ttk.Button(log_toolbar, text="Hatalar", width=10,
+                   command=lambda: self._set_log_filter('errors')).pack(side=tk.LEFT, padx=4)
+        ttk.Button(log_toolbar, text="Temizle", width=10,
+                   command=self._clear_log).pack(side=tk.LEFT, padx=4)
+        ttk.Button(log_toolbar, text="Kaydet…", width=10,
+                   command=self._save_log).pack(side=tk.LEFT, padx=4)
+
+        # Text widget — 18 satır, monospace
+        self.log_text = tk.Text(log_frame, height=18, width=80, wrap=tk.WORD,
+                                font=('Consolas', 9))
         scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
-        
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        
+
+        self.log_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
+
+        # Renk tag'lerini uygula
+        configure_text_tags(self.log_text)
+
+        # === Sonuç paneli (kalıcı) ===
+        self.summary_frame = ttk.LabelFrame(main_frame, text="Sonuç", padding="8")
+        self.summary_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(8, 0))
+        self.summary_label = ttk.Label(
+            self.summary_frame,
+            text="Henüz işlem yapılmadı.",
+            font=('Arial', 9),
+            justify=tk.LEFT,
+            anchor=tk.W,
+        )
+        self.summary_label.pack(fill=tk.X, expand=True)
+
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(5, weight=1)
+        main_frame.rowconfigure(5, weight=1)  # log alanı büyür
         log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
+        log_frame.rowconfigure(1, weight=1)  # toolbar üstte, text aşağı genişler
 
     def on_closing(self):
         """Pencere kapatma olayını handle et"""
@@ -538,10 +681,89 @@ class MythosGUI:
             self.output_dir_var.set(dirname)
     
     def log_message(self, message: str):
-        """Log mesajı ekle"""
-        self.log_text.insert(tk.END, f"{message}\n")
+        """
+        Log mesajı ekle.
+
+        Mesajı hem Text widget'a doğrudan yazar (geriye uyumluluk için
+        mevcut çağrı yerleri çalışmaya devam etsin), hem de mesaj içeriğine
+        göre uygun renk tag'i uygular.
+        """
+        tag = self._tag_for_message(message)
+        self.log_text.insert(tk.END, f"{message}\n", (tag,))
         self.log_text.see(tk.END)
         self.root.update()
+
+    @staticmethod
+    def _tag_for_message(message: str) -> str:
+        """Mesaj içeriğine göre renk tag'i tahmin et"""
+        m = message.lower()
+        if '❌' in message or 'hata' in m or 'başarısız' in m:
+            return 'error'
+        if '⚠' in message or 'uyarı' in m or 'çakışma' in m:
+            return 'warning'
+        if '✅' in message or 'tamamlandı' in m or 'başarılı' in m:
+            return 'success'
+        return 'info'
+
+    def _set_log_filter(self, mode: str) -> None:
+        """
+        Log filtresi: 'all' → hepsi, 'warnings' → sadece warning+error,
+        'errors' → sadece error. Text tag elide ile gizler.
+        """
+        # Önce her şeyi göster
+        for tag in ('info', 'warning', 'error', 'success', 'debug'):
+            self.log_text.tag_configure(tag, elide=False)
+
+        if mode == 'warnings':
+            for tag in ('info', 'debug', 'success'):
+                self.log_text.tag_configure(tag, elide=True)
+        elif mode == 'errors':
+            for tag in ('info', 'warning', 'debug', 'success'):
+                self.log_text.tag_configure(tag, elide=True)
+        # 'all' için zaten hepsi açık
+
+    def _clear_log(self) -> None:
+        """Log alanını temizle"""
+        self.log_text.delete(1.0, tk.END)
+
+    def _save_log(self) -> None:
+        """Log içeriğini .txt dosyasına kaydet"""
+        filename = filedialog.asksaveasfilename(
+            title="Log Kaydet",
+            defaultextension=".txt",
+            filetypes=[("Text dosyası", "*.txt"), ("Tüm dosyalar", "*.*")],
+            initialfile=f"mythos-log-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt",
+        )
+        if not filename:
+            return
+        try:
+            content = self.log_text.get(1.0, tk.END)
+            Path(filename).write_text(content, encoding='utf-8')
+            messagebox.showinfo("Kaydedildi", f"Log kaydedildi:\n{filename}")
+        except Exception as exc:
+            messagebox.showerror("Hata", f"Log kaydedilemedi: {exc}")
+
+    def _show_summary(self, title: str, lines: List[str]) -> None:
+        """
+        Sonuç panelini güncelle.
+
+        title: panel başlığı (örn. "Part 2 • 14:32:15")
+        lines: satır satır metin (emoji + içerik)
+        """
+        now = datetime.now().strftime('%H:%M:%S')
+        self.summary_frame.configure(text=f"Sonuç — {title} • {now}")
+        self.summary_label.configure(text="\n".join(lines))
+        self._last_summary = title
+
+    def _begin_op(self) -> None:
+        """İşlem başlangıcı — süre ölçümü"""
+        self._op_start_time = time.monotonic()
+
+    def _elapsed_op(self) -> float:
+        """İşlem süresi (saniye, başlangıç yoksa 0)"""
+        if self._op_start_time is None:
+            return 0.0
+        return time.monotonic() - self._op_start_time
     
     def update_progress(self, current: int, total: int, percentage: float):
         """Progress bar güncelle"""
@@ -633,8 +855,9 @@ class MythosGUI:
             return
         
         self.log_text.delete(1.0, tk.END)
-        self.log_message("İşlem başlıyor...")
-        
+        self.log_message("Part 1: Checklist İşleme başlıyor...")
+        self._begin_op()
+
         try:
             input_path = Path(self.input_file_var.get())
             output_dir = Path(self.output_dir_var.get())
@@ -711,6 +934,18 @@ class MythosGUI:
 
                 self.log_message(f"📊 {total_cards} kart, {total_players} oyuncu")
                 self.log_message(f"📝 {normal_count} normal, ✍️ {signed_count} imzalı, 🏆 {base_count} base kart")
+
+                # Kalıcı özet paneli güncelle
+                elapsed = self._elapsed_op()
+                error_count = len(result.get('errors', []))
+                warn_count = len(result.get('warnings', []))
+                summary_lines = [
+                    f"📄  {len(result['files'])} dosya oluşturuldu",
+                    f"📊  {total_cards} kart   •   {total_players} oyuncu",
+                    f"📝  {normal_count} normal   •   ✍️ {signed_count} imzalı   •   🏆 {base_count} base",
+                    f"⏱  {elapsed:.1f} saniye   •   {error_count} hata   •   {warn_count} uyarı",
+                ]
+                self._show_summary("Part 1 — Checklist İşleme", summary_lines)
                             # Hata ve uyarıları da göster
                 if result.get('errors'):
                     self.log_message(f"\n⚠️ İşlem {len(result['errors'])} hata ile tamamlandı:")
@@ -881,6 +1116,7 @@ class MythosGUI:
 
             self.log_text.delete(1.0, tk.END)
             self.log_message("Part 2: Görsel Eşleştirme başlıyor...")
+            self._begin_op()
 
             # Tarih ekleme durumunu logla
             add_date = self.add_date_var.get()
@@ -889,7 +1125,7 @@ class MythosGUI:
             else:
                 self.log_message("📅 Tarih ekleme KAPALI")
 
-            self.log_message(f"🔒 Strict Mode: AÇIK (fazla kelime reddedilir)")
+            self.log_message(f"🔒 Strict Mode: KAPALI (fazla kelime tolere edilir)")
             self.log_message("\n🚀 Eşleştirme başlıyor...\n")
 
             try:
@@ -913,6 +1149,17 @@ class MythosGUI:
                         self.log_message(f"  Satır {w['row']}: {w['message']}")
                     if len(result['warnings']) > 5:
                         self.log_message(f"  ... ve {len(result['warnings'])-5} uyarı daha")
+
+                # Kalıcı özet paneli güncelle
+                elapsed = self._elapsed_op()
+                warn_count = len(result.get('warnings', []))
+                summary_lines = [
+                    f"✅  {result['found_count']} / {result['total_cards']} kart eşleşti  ({result['success_rate']:.1f}%)",
+                    f"❌  {result['missing_count']} kart eksik (görseli yok)",
+                    f"⚠️  {result['conflict_count']} çakışma (manuel kontrol gerek)",
+                    f"⏱  {elapsed:.1f} saniye   •   {warn_count} uyarı",
+                ]
+                self._show_summary("Part 2 — Görsel Eşleştirme", summary_lines)
 
                 # Sonuç mesajı oluştur
                 msg = (
@@ -1018,6 +1265,7 @@ class MythosGUI:
         self.log_text.delete(1.0, tk.END)
         self.log_message("Bölüm 3: Dosya Adı Kısaltma başlıyor...")
         self.log_message(f"Max uzunluk: {self.max_length_var.get()} karakter")
+        self._begin_op()
 
         try:
             result = process_shortening(
@@ -1036,6 +1284,16 @@ class MythosGUI:
 
             if result['backup_dir']:
                 self.log_message(f"\n💾 Yedek: {result['backup_dir']}")
+
+            # Kalıcı özet paneli güncelle
+            elapsed = self._elapsed_op()
+            summary_lines = [
+                f"📊  {result['total_files']} dosya tarandı",
+                f"✂️  {result['shortened_count']} kısaltıldı   •   ⏭️ {result['skipped_count']} zaten uygun",
+                f"❌  {result.get('error_count', 0)} hata",
+                f"⏱  {elapsed:.1f} saniye",
+            ]
+            self._show_summary("Part 3 — Dosya Adı Kısaltma", summary_lines)
 
             # Anlaşılır sonuç mesajı
             msg = result.get('message', f"Kısaltılan: {result['shortened_count']} dosya")
