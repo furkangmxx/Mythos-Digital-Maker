@@ -437,7 +437,8 @@ class MythosGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title(f"{PROGRAM_NAME} v{PROGRAM_VERSION}")
-        self.root.geometry("600x700")
+        self.root.geometry("1100x800")
+        self.root.minsize(900, 600)
         
         # Kapanma kontrolü
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -460,7 +461,12 @@ class MythosGUI:
         self.part3_image_dir_var = tk.StringVar()
         self.max_length_var = tk.IntVar(value=97)
 
+        # İşlem sırasında disable edilecek butonların listesi
+        # setup_ui içinde doldurulur
+        self._action_buttons: List[ttk.Button] = []
+
         self.setup_ui()
+        self._collect_action_buttons()
 
         # Logger köprüsü — backend logger.info/warning/error mesajları
         # otomatik olarak GUI log alanına düşer (renkli, sıralı, thread-safe)
@@ -475,19 +481,32 @@ class MythosGUI:
 
 
     def setup_ui(self):
-        """UI kurulumu"""
-        
+        """
+        UI kurulumu — Notebook + PanedWindow yapısı:
+        - Üst: 3 sekme (Part 1/2/3)
+        - Alt: Log + Sonuç paneli (sash ile resize edilebilir)
+        - En alt: 3 segmentli status bar + progress
+        """
+
         # Main frame
         main_frame = ttk.Frame(self.root, padding="8")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Title - daha küçük ve kompakt
+
+        # Title
         title_label = ttk.Label(main_frame, text=PROGRAM_NAME, font=('Arial', 13, 'bold'))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 8))
-        
-        # === PART 1: Checklist İşlemleri ===
-        part1_frame = ttk.LabelFrame(main_frame, text="Part 1: Checklist İşleme", padding="8")
-        part1_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 8))
+        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 6))
+
+        # PanedWindow — üst: notebook, alt: log+summary
+        paned = ttk.PanedWindow(main_frame, orient=tk.VERTICAL)
+        paned.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        # === ÜST PANE: Notebook (3 sekme) ===
+        self.notebook = ttk.Notebook(paned)
+        paned.add(self.notebook, weight=2)
+
+        # Sekme 1: Part 1
+        part1_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(part1_frame, text="  Part 1: Kart Listesi  ")
         
         # Input file
         ttk.Label(part1_frame, text="Giriş Excel:").grid(row=0, column=0, sticky=tk.W, pady=3)
@@ -517,10 +536,10 @@ class MythosGUI:
         ttk.Button(buttons_frame, text="Oluştur", command=self.generate, width=12).pack(side=tk.LEFT, padx=3)
         
         part1_frame.columnconfigure(1, weight=1)
-        
-        # === PART 2: Görsel Eşleştirme ===
-        part2_frame = ttk.LabelFrame(main_frame, text="Part 2: Görsel Eşleştirme", padding="8")
-        part2_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 8))
+
+        # Sekme 2: Part 2
+        part2_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(part2_frame, text="  Part 2: Görsel Eşleştirme  ")
         
         # Excel dosyası
         ttk.Label(part2_frame, text="Excel Dosyası:").grid(row=0, column=0, sticky=tk.W, pady=3)
@@ -565,9 +584,9 @@ class MythosGUI:
 
         part2_frame.columnconfigure(1, weight=1)
 
-        # === PART 3: Dosya Adı Kısaltma ===
-        part3_frame = ttk.LabelFrame(main_frame, text="Bölüm 3: Dosya Adı Kısaltma", padding="8")
-        part3_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 8))
+        # Sekme 3: Part 3
+        part3_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(part3_frame, text="  Part 3: Dosya Adı Kısaltma  ")
 
         # Excel dosyası
         ttk.Label(part3_frame, text="Excel Dosyası:").grid(row=0, column=0, sticky=tk.W, pady=3)
@@ -592,20 +611,15 @@ class MythosGUI:
 
         part3_frame.columnconfigure(1, weight=1)
 
-        # === Progress ve Status - tek satırda ===
-        status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 5))
-        
-        self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(status_frame, variable=self.progress_var, maximum=100)
-        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        
-        self.status_var = tk.StringVar(value="Hazır")
-        ttk.Label(status_frame, textvariable=self.status_var, width=25, anchor=tk.W).pack(side=tk.LEFT)
-        
-        # === Log alanı — büyük, renkli, monospace ===
-        log_frame = ttk.LabelFrame(main_frame, text="Log", padding="5")
-        log_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # === ALT PANE: Log + Sonuç paneli ===
+        bottom_pane = ttk.Frame(paned)
+        paned.add(bottom_pane, weight=3)
+        bottom_pane.columnconfigure(0, weight=1)
+        bottom_pane.rowconfigure(0, weight=1)
+
+        # === Log alanı (alt pane'in üstü) ===
+        log_frame = ttk.LabelFrame(bottom_pane, text="Log", padding="5")
+        log_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         # Toolbar — filtre + temizle + kaydet
         log_toolbar = ttk.Frame(log_frame)
@@ -633,9 +647,9 @@ class MythosGUI:
         # Renk tag'lerini uygula
         configure_text_tags(self.log_text)
 
-        # === Sonuç paneli (kalıcı) ===
-        self.summary_frame = ttk.LabelFrame(main_frame, text="Sonuç", padding="8")
-        self.summary_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(8, 0))
+        # === Sonuç paneli (alt pane'in altı, kalıcı) ===
+        self.summary_frame = ttk.LabelFrame(bottom_pane, text="Sonuç", padding="8")
+        self.summary_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(6, 0))
         self.summary_label = ttk.Label(
             self.summary_frame,
             text="Henüz işlem yapılmadı.",
@@ -645,11 +659,41 @@ class MythosGUI:
         )
         self.summary_label.pack(fill=tk.X, expand=True)
 
+        # === Status bar (en alt, 3 segmentli) ===
+        # Progress bar üstte tam genişlik
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(
+            main_frame, variable=self.progress_var, maximum=100, mode='determinate'
+        )
+        self.progress_bar.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(4, 2))
+
+        # Status segmentleri
+        status_bar = ttk.Frame(main_frame, relief=tk.SUNKEN, borderwidth=1)
+        status_bar.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E))
+        status_bar.columnconfigure(1, weight=1)
+
+        # Sol: durum
+        self.status_state_var = tk.StringVar(value="Hazır")
+        ttk.Label(status_bar, textvariable=self.status_state_var,
+                  width=22, anchor=tk.W, padding=(4, 2)).grid(row=0, column=0, sticky=tk.W)
+        # Orta: detay (adım/yüzde)
+        self.status_detail_var = tk.StringVar(value="")
+        ttk.Label(status_bar, textvariable=self.status_detail_var,
+                  anchor=tk.W, padding=(4, 2)).grid(row=0, column=1, sticky=(tk.W, tk.E))
+        # Sağ: süre
+        self.status_time_var = tk.StringVar(value="")
+        ttk.Label(status_bar, textvariable=self.status_time_var,
+                  width=14, anchor=tk.E, padding=(4, 2)).grid(row=0, column=2, sticky=tk.E)
+
+        # Geriye uyumluluk: eski self.status_var kullanan kodlar var
+        # → status_detail_var'a alias yap
+        self.status_var = self.status_detail_var
+
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(5, weight=1)  # log alanı büyür
+        main_frame.rowconfigure(1, weight=1)  # PanedWindow büyür
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(1, weight=1)  # toolbar üstte, text aşağı genişler
 
@@ -755,15 +799,88 @@ class MythosGUI:
         self.summary_label.configure(text="\n".join(lines))
         self._last_summary = title
 
-    def _begin_op(self) -> None:
-        """İşlem başlangıcı — süre ölçümü"""
+    def _begin_op(self, op_name: str = "İşlem") -> None:
+        """İşlem başlangıcı — süre ölçümü + status bar set"""
         self._op_start_time = time.monotonic()
+        self.status_state_var.set("İşlem devam ediyor")
+        self.status_detail_var.set(f"{op_name} başlıyor…")
+        self.status_time_var.set("")
+        self._set_action_buttons_enabled(False)
+        self.root.update_idletasks()
+
+    def _finish_op(self, ok: bool = True) -> None:
+        """İşlem sonu — status bar set + butonları aç"""
+        elapsed = self._elapsed_op()
+        if ok:
+            self.status_state_var.set("Tamamlandı")
+        else:
+            self.status_state_var.set("Hata")
+        self.status_time_var.set(f"{elapsed:.1f}s")
+        self._set_action_buttons_enabled(True)
+        self.root.update_idletasks()
 
     def _elapsed_op(self) -> float:
         """İşlem süresi (saniye, başlangıç yoksa 0)"""
         if self._op_start_time is None:
             return 0.0
         return time.monotonic() - self._op_start_time
+
+    def _set_action_buttons_enabled(self, enabled: bool) -> None:
+        """
+        Tüm "işlem başlatan" butonların state'ini değiştir.
+        İşlem sırasında çift tıklama / paralel işlem tuzağını engellemek için.
+        """
+        state = 'normal' if enabled else 'disabled'
+        for btn in self._action_buttons:
+            try:
+                btn.configure(state=state)
+            except tk.TclError:
+                pass
+
+    def _collect_action_buttons(self) -> None:
+        """
+        Tüm aksiyon (işlem başlatan) butonlarını rekürsif olarak topla.
+        Mevcut UI kodunu değiştirmeden text-bazlı whitelist ile çalışır.
+        """
+        action_texts = {
+            "Doğrula",            # Part 1
+            "Oluştur",            # Part 1
+            "Kontrol Et",         # Part 2 / Part 3
+            "Görselleri Eşleştir",  # Part 2
+            "Kısalt",             # Part 3
+        }
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Button):
+                    text = child.cget('text').strip()
+                    if text in action_texts:
+                        self._action_buttons.append(child)
+                walk(child)
+
+        walk(self.root)
+
+    @staticmethod
+    def _format_user_error(exc: BaseException) -> str:
+        """
+        Exception'ı kullanıcıya gösterilecek anlaşılır mesaja çevir.
+        Tam stack trace zaten log dosyasına yazılıyor (FileHandler);
+        kullanıcı ekranda sade bir özet görsün.
+        """
+        if isinstance(exc, FileNotFoundError):
+            return f"Dosya bulunamadı: {exc.filename or exc}"
+        if isinstance(exc, PermissionError):
+            return (
+                f"Dosya başka programda açık olabilir, kapatıp tekrar dene: "
+                f"{exc.filename or exc}"
+            )
+        if isinstance(exc, ValueError):
+            return f"Excel formatı/verisi uygun değil: {exc}"
+        msg = str(exc) or exc.__class__.__name__
+        # Çok uzunsa kısalt
+        if len(msg) > 200:
+            msg = msg[:200] + "…"
+        return f"Beklenmedik hata: {msg}\n(Tam detay için logs/ klasörüne bak)"
     
     def update_progress(self, current: int, total: int, percentage: float):
         """Progress bar güncelle"""
@@ -856,7 +973,7 @@ class MythosGUI:
         
         self.log_text.delete(1.0, tk.END)
         self.log_message("Part 1: Checklist İşleme başlıyor...")
-        self._begin_op()
+        self._begin_op("Part 1 — Checklist İşleme")
 
         try:
             input_path = Path(self.input_file_var.get())
@@ -990,12 +1107,18 @@ class MythosGUI:
                 messagebox.showerror("Hata", "İşlem başarısız! Detaylar için log'u kontrol edin.")
         
         except Exception as e:
-            self.log_message(f"❌ Beklenmeyen hata: {str(e)}")
-            messagebox.showerror("Hata", f"Beklenmeyen hata: {str(e)}")
-            self.status_var.set("Hata!")
+            user_msg = self._format_user_error(e)
+            self.logger.error(f"Part 1 hatası: {e}", exc_info=True)
+            self.log_message(f"❌ {user_msg}")
+            messagebox.showerror("Hata", user_msg)
+            self._finish_op(ok=False)
 
         finally:
             self.progress_var.set(0)
+            if self.status_state_var.get() == "İşlem devam ediyor":
+                # success path _finish_op çağırmadıysa (örn. dry-run validation
+                # durması) yine de butonları aç ve duruma uygun status set
+                self._finish_op(ok=True)
         
     def select_image_dir(self):
         """Görsel klasörü seçici"""
@@ -1116,7 +1239,7 @@ class MythosGUI:
 
             self.log_text.delete(1.0, tk.END)
             self.log_message("Part 2: Görsel Eşleştirme başlıyor...")
-            self._begin_op()
+            self._begin_op("Part 2 — Görsel Eşleştirme")
 
             # Tarih ekleme durumunu logla
             add_date = self.add_date_var.get()
@@ -1186,8 +1309,13 @@ class MythosGUI:
                         os.system(f"xdg-open '{excel_dir}'")
 
             except Exception as e:
-                self.log_message(f"❌ HATA: {str(e)}")
-                messagebox.showerror("Hata", str(e))
+                user_msg = self._format_user_error(e)
+                self.logger.error(f"Part 2 hatası: {e}", exc_info=True)
+                self.log_message(f"❌ {user_msg}")
+                messagebox.showerror("Hata", user_msg)
+                self._finish_op(ok=False)
+            else:
+                self._finish_op(ok=True)
 
     # === PART 3 METHODS ===
 
@@ -1265,7 +1393,7 @@ class MythosGUI:
         self.log_text.delete(1.0, tk.END)
         self.log_message("Bölüm 3: Dosya Adı Kısaltma başlıyor...")
         self.log_message(f"Max uzunluk: {self.max_length_var.get()} karakter")
-        self._begin_op()
+        self._begin_op("Part 3 — Dosya Adı Kısaltma")
 
         try:
             result = process_shortening(
@@ -1311,8 +1439,13 @@ class MythosGUI:
                     os.system(f"xdg-open '{excel_dir}'")
 
         except Exception as e:
-            self.log_message(f"❌ HATA: {str(e)}")
-            messagebox.showerror("Hata", str(e))
+            user_msg = self._format_user_error(e)
+            self.logger.error(f"Part 3 hatası: {e}", exc_info=True)
+            self.log_message(f"❌ {user_msg}")
+            messagebox.showerror("Hata", user_msg)
+            self._finish_op(ok=False)
+        else:
+            self._finish_op(ok=True)
 
     def _find_latest_excel(self):
         """En son Excel dosyasını bul"""
